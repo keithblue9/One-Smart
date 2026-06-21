@@ -7,6 +7,15 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lang, setLang] = useState(() => localStorage.getItem("os_lang") || "id");
+  const [theme, setTheme] = useState(() => localStorage.getItem("os_theme") || "light");
+
+  // Apply theme class to <html>
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "dark") root.classList.add("dark");
+    else root.classList.remove("dark");
+    localStorage.setItem("os_theme", theme);
+  }, [theme]);
 
   const refresh = useCallback(async () => {
     const token = localStorage.getItem("os_token");
@@ -22,6 +31,7 @@ export function AuthProvider({ children }) {
         setLang(data.language);
         localStorage.setItem("os_lang", data.language);
       }
+      if (data.theme) setTheme(data.theme);
     } catch {
       setUser(null);
     } finally {
@@ -41,6 +51,7 @@ export function AuthProvider({ children }) {
       setLang(data.user.language);
       localStorage.setItem("os_lang", data.user.language);
     }
+    if (data.user?.theme) setTheme(data.user.theme);
   };
 
   const logout = () => {
@@ -54,8 +65,13 @@ export function AuthProvider({ children }) {
     if (user) api.post("/auth/profile", { language: l }).catch(() => {});
   };
 
+  const switchTheme = (t) => {
+    setTheme(t);
+    if (user) api.post("/auth/profile", { theme: t }).catch(() => {});
+  };
+
   return (
-    <AuthCtx.Provider value={{ user, setUser, loading, login, logout, lang, switchLang, refresh }}>
+    <AuthCtx.Provider value={{ user, setUser, loading, login, logout, lang, switchLang, theme, switchTheme, refresh }}>
       {children}
     </AuthCtx.Provider>
   );

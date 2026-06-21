@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import AIInsightButton from "@/components/AIInsightButton";
+import BookmarkButton from "@/components/BookmarkButton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 function Pill({ children, tone = "default" }) {
@@ -77,11 +78,14 @@ export default function Education() {
                     <h3 className="font-heading text-lg text-ink leading-tight">{s.name}</h3>
                     <p className="text-xs text-ink-muted mt-0.5">{s.country}</p>
                   </div>
-                  {s.eligible ? (
-                    <Pill tone="ok"><CheckCircle size={12} weight="fill" className="inline mr-1" />{t(lang, "eligible")}</Pill>
-                  ) : (
-                    <Pill tone="no"><XCircle size={12} weight="fill" className="inline mr-1" />{t(lang, "not_eligible")}</Pill>
-                  )}
+                  <div className="flex items-center gap-1">
+                    <BookmarkButton kind="scholarship" itemId={s.id} payload={{ name: s.name, country: s.country, deadline: s.deadline }} testId={`bookmark-scholarship-${s.id}`} />
+                    {s.eligible ? (
+                      <Pill tone="ok"><CheckCircle size={12} weight="fill" className="inline mr-1" />{t(lang, "eligible")}</Pill>
+                    ) : (
+                      <Pill tone="no"><XCircle size={12} weight="fill" className="inline mr-1" />{t(lang, "not_eligible")}</Pill>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-xs">

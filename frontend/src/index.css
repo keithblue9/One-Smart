@@ -59,12 +59,77 @@ h1, h2, h3, h4, .font-heading {
     --ring: 148 25% 23%;
     --radius: 0.85rem;
   }
+  .dark {
+    --bg-linen: #14181a;
+    --surface-card: #1c2225;
+    --surface-alt: #232a2e;
+    --forest: #6aa48a;
+    --forest-hover: #82bca0;
+    --bronze: #d99464;
+    --bronze-soft: rgba(217, 148, 100, 0.14);
+    --text-heading: #f1ece4;
+    --text-body: #d4cfc7;
+    --text-muted: #8f8c87;
+    --border-default: #2a3236;
+
+    --background: 200 12% 9%;
+    --foreground: 30 25% 92%;
+    --card: 200 10% 13%;
+    --card-foreground: 30 25% 92%;
+    --popover: 200 10% 13%;
+    --popover-foreground: 30 25% 92%;
+    --primary: 148 27% 53%;
+    --primary-foreground: 200 12% 9%;
+    --secondary: 200 10% 16%;
+    --secondary-foreground: 30 25% 92%;
+    --muted: 200 10% 16%;
+    --muted-foreground: 200 5% 55%;
+    --accent: 25 60% 62%;
+    --accent-foreground: 200 12% 9%;
+    --destructive: 0 60% 50%;
+    --destructive-foreground: 30 25% 92%;
+    --border: 200 8% 21%;
+    --input: 200 8% 21%;
+    --ring: 148 27% 53%;
+  }
 }
 
 @layer base {
   * { border-color: hsl(var(--border)); }
   body { background-color: hsl(var(--background)); color: hsl(var(--foreground)); }
 }
+
+/* Dark mode utility overrides — keep palette consistent across hardcoded color classes */
+.dark .bg-linen { background-color: #14181a; }
+.dark .bg-white { background-color: #1c2225; }
+.dark .bg-stone { background-color: #2a3236; }
+.dark .text-ink { color: #f1ece4; }
+.dark .text-ink-body { color: #d4cfc7; }
+.dark .text-ink-muted { color: #8f8c87; }
+.dark .text-forest { color: #6aa48a; }
+.dark .bg-forest { background-color: #6aa48a; color: #14181a; }
+.dark .bg-forest:hover { background-color: #82bca0; }
+.dark .bg-forest-hover { background-color: #82bca0; }
+.dark .border-forest { border-color: #6aa48a; }
+.dark .text-bronze { color: #d99464; }
+.dark .bg-white\/80,
+.dark .bg-white\/85,
+.dark .bg-white\/90,
+.dark .bg-linen\/85 { background-color: rgba(28, 34, 37, 0.85); }
+.dark [class*="border-[#E8E6E1]"] { border-color: #2a3236 !important; }
+.dark [class*="bg-[#EFF3F1]"] { background-color: #1f2a25; }
+.dark [class*="bg-[#F3EFEA]"] { background-color: #2a2620; }
+.dark [class*="bg-[#F0EDE8]"] { background-color: #28241f; }
+.dark [class*="bg-[#EBF1ED]"] { background-color: #1d2823; }
+.dark [class*="bg-[#F4EFE6]"] { background-color: #2a2620; }
+.dark [class*="bg-[#E5EFE7]"] { background-color: #1f2a25; color: #82bca0; }
+.dark [class*="bg-[#F4E8D9]"] { background-color: #2c241a; color: #d99464; }
+.dark [class*="text-[#B76E38]"] { color: #d99464; }
+.dark .bg-red-50 { background-color: #2c1a1a; }
+.dark .text-red-600,
+.dark .text-red-700 { color: #f08a8a; }
+.dark .border-red-200 { border-color: #4a2a2a; }
+.dark .hover\:bg-red-50:hover { background-color: #2c1a1a; }
 
 /* PWA safe-area */
 .pb-safe { padding-bottom: max(env(safe-area-inset-bottom), 16px); }

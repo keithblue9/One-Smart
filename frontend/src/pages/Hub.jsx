@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { GraduationCap, Briefcase, ChartLineUp, Globe, NotePencil, ArrowRight, TrendUp, TrendDown } from "@phosphor-icons/react";
+import { GraduationCap, Briefcase, ChartLineUp, Globe, NotePencil, ArrowRight, TrendUp, TrendDown, BookmarkSimple } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
@@ -11,6 +11,7 @@ const tiles = [
   { to: "/app/investment", icon: ChartLineUp, key: "investment", desc: "market_overview", color: "bg-[#F0EDE8]", testId: "tile-investment" },
   { to: "/app/world", icon: Globe, key: "world", desc: "news", color: "bg-[#EBF1ED]", testId: "tile-world" },
   { to: "/app/quick", icon: NotePencil, key: "quick", desc: "notes", color: "bg-[#F4EFE6]", testId: "tile-quick" },
+  { to: "/app/bookmarks", icon: BookmarkSimple, key: "bookmarks", desc: "bookmarks", color: "bg-[#F4E8D9]", testId: "tile-bookmarks" },
 ];
 
 function StatChip({ label, value, delta }) {

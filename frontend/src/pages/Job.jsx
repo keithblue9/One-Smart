@@ -4,6 +4,8 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import AIInsightButton from "@/components/AIInsightButton";
+import BookmarkButton from "@/components/BookmarkButton";
+import CVGenerator from "@/components/CVGenerator";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 
@@ -64,9 +66,12 @@ export default function Job() {
                 <div className="flex items-start gap-3">
                   <img src={c.logo} alt={c.name} className="h-12 w-12 rounded-lg bg-stone object-contain p-1.5" onError={(e) => { e.target.style.display = 'none'; }} />
                   <div className="flex-1">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <h3 className="font-heading text-lg text-ink">{c.name}</h3>
-                      {c.remote && <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#E5EFE7] text-forest">{t(lang, "remote")}</span>}
+                      <div className="flex items-center gap-1">
+                        <BookmarkButton kind="company" itemId={c.id} payload={{ name: c.name, location: c.location, industry: c.industry }} testId={`bookmark-company-${c.id}`} />
+                        {c.remote && <span className="text-[11px] px-2 py-0.5 rounded-full bg-[#E5EFE7] text-forest">{t(lang, "remote")}</span>}
+                      </div>
                     </div>
                     <p className="text-xs text-ink-muted">{c.industry}</p>
                     <div className="flex items-center gap-1 text-xs text-ink-muted mt-1">
@@ -160,16 +165,15 @@ export default function Job() {
           )}
         </TabsContent>
 
-        <TabsContent value="cv" className="mt-5">
+        <TabsContent value="cv" className="mt-5 space-y-5">
+          <CVGenerator />
           <div className="card-base p-6">
             <div className="flex items-center gap-2 mb-4">
               <Lightbulb size={22} weight="duotone" className="text-bronze" />
-              <h2 className="font-heading text-xl text-ink">{t(lang, "cv_recommendation")}</h2>
+              <h2 className="font-heading text-xl text-ink">{lang === "id" ? "Konsultasi AI CV" : "AI CV Consult"}</h2>
             </div>
-            <p className="text-sm text-ink-body mb-5 leading-relaxed">
-              {lang === "id"
-                ? "Gunakan AI untuk mendapatkan rekomendasi CV yang spesifik untuk role atau perusahaan target Anda. Pilih target di bawah, atau ketik bebas."
-                : "Use AI to get tailored CV recommendations for your target role or company."}
+            <p className="text-sm text-ink-body mb-4 leading-relaxed">
+              {lang === "id" ? "Pilih target spesifik untuk dapat rekomendasi mendalam, atau buat CV PDF di atas." : "Pick a specific target for deep AI advice, or generate PDF above."}
             </p>
             <div className="flex flex-wrap gap-2">
               {["Software Engineer at Google", "Product Manager at Meta", "Data Scientist - remote", "UX Designer freelance"].map((tg) => (
@@ -182,17 +186,10 @@ export default function Job() {
                 />
               ))}
             </div>
-            <div className="mt-6 ai-panel">
-              <p className="text-sm">
-                {lang === "id"
-                  ? "💡 Tip: Sertakan KPI nyata (angka, persen, dampak) di setiap pengalaman. Recruiter ATS-friendly: gunakan kata kunci dari job description."
-                  : "💡 Tip: Include real KPIs (numbers, %, impact) per experience. For ATS-friendly: use exact keywords from the job description."}
-              </p>
-            </div>
             <div className="mt-5">
               <h3 className="font-heading text-base text-ink mb-2">{t(lang, "portfolio_tips")} - Job</h3>
               <ul className="text-sm list-disc pl-5 space-y-1">
-                {tips?.job?.map((t, i) => <li key={i}>{t}</li>)}
+                {tips?.job?.map((tx, i) => <li key={i}>{tx}</li>)}
               </ul>
             </div>
           </div>

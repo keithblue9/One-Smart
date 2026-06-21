@@ -118,6 +118,7 @@ class ProfileUpdate(BaseModel):
     dob: Optional[str] = None  # ISO YYYY-MM-DD
     language: Optional[str] = None
     name: Optional[str] = None
+    theme: Optional[str] = None  # "light" | "dark"
 
 
 class AIInsightReq(BaseModel):
@@ -160,12 +161,12 @@ async def login(req: LoginReq):
     if user["passcode_hash"] != hash_passcode(req.passcode):
         raise HTTPException(401, "Passcode salah")
     token = make_token(user["id"])
-    return {"token": token, "user": {"id": user["id"], "name": user.get("name"), "dob": user.get("dob"), "language": user.get("language", "id")}}
+    return {"token": token, "user": {"id": user["id"], "name": user.get("name"), "dob": user.get("dob"), "language": user.get("language", "id"), "theme": user.get("theme", "light")}}
 
 
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_user)):
-    return {"id": user["id"], "name": user.get("name"), "dob": user.get("dob"), "language": user.get("language", "id")}
+    return {"id": user["id"], "name": user.get("name"), "dob": user.get("dob"), "language": user.get("language", "id"), "theme": user.get("theme", "light")}
 
 
 @api.post("/auth/change-passcode")
@@ -512,10 +513,276 @@ async def push_test(user: dict = Depends(get_user)):
     return {"sent": sent, "total": len(subs), "errors": errors}
 
 
+# ============== BOOKMARKS ==============
+class BookmarkToggle(BaseModel):
+    kind: str  # "scholarship" | "company"
+    item_id: str
+    payload: dict = {}  # snapshot of the item (name, country/location, etc.) for display
+
+
+@api.get("/bookmarks")
+async def list_bookmarks(user: dict = Depends(get_user), kind: Optional[str] = None):
+    q = {"user_id": user["id"]}
+    if kind:
+        q["kind"] = kind
+    cursor = db.bookmarks.find(q, {"_id": 0}).sort("created_at", -1)
+    return {"items": await cursor.to_list(500)}
+
+
+@api.post("/bookmarks/toggle")
+async def toggle_bookmark(req: BookmarkToggle, user: dict = Depends(get_user)):
+    existing = await db.bookmarks.find_one({"user_id": user["id"], "kind": req.kind, "item_id": req.item_id})
+    if existing:
+        await db.bookmarks.delete_one({"_id": existing["_id"]})
+        return {"bookmarked": False}
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "kind": req.kind,
+        "item_id": req.item_id,
+        "payload": req.payload,
+        "created_at": now_iso(),
+    }
+    await db.bookmarks.insert_one(doc)
+    return {"bookmarked": True}
+
+
+# ============== CV PDF GENERATOR ==============
+class CVRequest(BaseModel):
+    name: str
+    role_target: str
+    summary: Optional[str] = ""
+    email: Optional[str] = ""
+    phone: Optional[str] = ""
+    location: Optional[str] = ""
+    experiences: List[dict] = []  # [{title, company, period, bullets:[]}]
+    education: List[dict] = []  # [{degree, school, period, note}]
+    skills: List[str] = []
+    language: str = "id"
+
+
+def _build_cv_pdf(data: dict, ai_bullets: dict) -> bytes:
+    """Build a clean ATS-friendly PDF using reportlab."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+    from reportlab.platypus import HRFlowable
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=1.8*cm, bottomMargin=1.8*cm, title=f"CV - {data['name']}")
+    styles = getSampleStyleSheet()
+    forest = HexColor("#2C4A3B")
+    ink = HexColor("#1A1918")
+    muted = HexColor("#767470")
+
+    name_style = ParagraphStyle("name", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=22, textColor=ink, leading=26, spaceAfter=2)
+    role_style = ParagraphStyle("role", parent=styles["Normal"], fontName="Helvetica", fontSize=11, textColor=muted, leading=14, spaceAfter=6)
+    contact_style = ParagraphStyle("contact", parent=styles["Normal"], fontName="Helvetica", fontSize=9, textColor=muted, leading=12, spaceAfter=10)
+    section_style = ParagraphStyle("section", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11, textColor=forest, leading=14, spaceBefore=10, spaceAfter=4, textTransform="uppercase")
+    item_title = ParagraphStyle("itemTitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=10.5, textColor=ink, leading=13, spaceAfter=0)
+    item_sub = ParagraphStyle("itemSub", parent=styles["Normal"], fontName="Helvetica-Oblique", fontSize=9.5, textColor=muted, leading=12, spaceAfter=4)
+    body_style = ParagraphStyle("body", parent=styles["Normal"], fontName="Helvetica", fontSize=10, textColor=ink, leading=13)
+    bullet_style = ParagraphStyle("bullet", parent=body_style, leftIndent=12, bulletIndent=2, spaceAfter=2)
+
+    story = []
+    story.append(Paragraph(data["name"], name_style))
+    story.append(Paragraph(data["role_target"], role_style))
+    contact_parts = [p for p in [data.get("email"), data.get("phone"), data.get("location")] if p]
+    if contact_parts:
+        story.append(Paragraph("  •  ".join(contact_parts), contact_style))
+    story.append(HRFlowable(width="100%", thickness=0.6, color=HexColor("#E8E6E1"), spaceBefore=0, spaceAfter=8))
+
+    # Summary
+    summary = data.get("summary") or ai_bullets.get("summary")
+    if summary:
+        story.append(Paragraph("PROFILE SUMMARY", section_style))
+        story.append(Paragraph(summary, body_style))
+
+    # Experience
+    if data.get("experiences"):
+        story.append(Paragraph("PROFESSIONAL EXPERIENCE", section_style))
+        for exp in data["experiences"]:
+            story.append(Paragraph(f"{exp.get('title','')} — {exp.get('company','')}", item_title))
+            if exp.get("period"):
+                story.append(Paragraph(exp["period"], item_sub))
+            bullets = exp.get("bullets") or []
+            # If AI enriched bullets exist, prefer them for this experience
+            ai_b = ai_bullets.get("experiences", {}).get(exp.get("title", "") + "|" + exp.get("company", ""))
+            if ai_b:
+                bullets = ai_b
+            if bullets:
+                items = [ListItem(Paragraph(b, body_style), leftIndent=10) for b in bullets]
+                story.append(ListFlowable(items, bulletType="bullet", start="•", leftIndent=12))
+            story.append(Spacer(1, 4))
+
+    # Education
+    if data.get("education"):
+        story.append(Paragraph("EDUCATION", section_style))
+        for ed in data["education"]:
+            story.append(Paragraph(f"{ed.get('degree','')} — {ed.get('school','')}", item_title))
+            sub = " · ".join([s for s in [ed.get("period"), ed.get("note")] if s])
+            if sub:
+                story.append(Paragraph(sub, item_sub))
+
+    # Skills
+    if data.get("skills"):
+        story.append(Paragraph("SKILLS", section_style))
+        story.append(Paragraph("  ·  ".join(data["skills"]), body_style))
+
+    # Optimization Tips (AI)
+    tips = ai_bullets.get("tips") or []
+    if tips:
+        story.append(Spacer(1, 10))
+        story.append(HRFlowable(width="100%", thickness=0.4, color=HexColor("#E8E6E1"), spaceBefore=0, spaceAfter=4))
+        story.append(Paragraph("AI OPTIMIZATION NOTES (remove before submitting)", section_style))
+        items = [ListItem(Paragraph(t, body_style), leftIndent=10) for t in tips]
+        story.append(ListFlowable(items, bulletType="bullet", start="•", leftIndent=12))
+
+    doc.build(story)
+    pdf = buf.getvalue()
+    buf.close()
+    return pdf
+
+
+@api.post("/cv/generate")
+async def cv_generate(req: CVRequest, user: dict = Depends(get_user)):
+    """Generate an ATS-optimized CV PDF. Uses Claude to enrich summary, action-verb experience bullets and optimization tips."""
+    from fastapi.responses import Response
+
+    ai_bullets = {"experiences": {}, "tips": [], "summary": None}
+    if EMERGENT_LLM_KEY:
+        lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
+        prompt = (
+            "Anda adalah CV writer profesional ATS-optimized. Berdasarkan data berikut:\n"
+            f"Nama: {req.name}\nTarget Role: {req.role_target}\n"
+            f"Existing summary: {req.summary or '(none)'}\n"
+            f"Experiences: {json.dumps(req.experiences, ensure_ascii=False)}\n"
+            f"Skills: {req.skills}\n\n"
+            f"Tugas (output JSON murni, no markdown fences):\n"
+            "{\n"
+            '  "summary": "1 paragraf 2-3 kalimat profile summary kuat ATS-friendly",\n'
+            '  "experiences": {\n'
+            '    "<title>|<company>": ["bullet 1 (action verb + KPI)", "bullet 2", "bullet 3"]\n'
+            "  },\n"
+            '  "tips": ["3-5 tips singkat memperkuat CV untuk target role"]\n'
+            "}\n"
+            f"Bahasa: {lang_label}. Output STRICT JSON only."
+        )
+        try:
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=str(uuid.uuid4()),
+                system_message="You output strict JSON only.",
+            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            raw = await chat.send_message(UserMessage(text=prompt))
+            text = raw if isinstance(raw, str) else str(raw)
+            # strip code fences if any
+            if "```" in text:
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            parsed = json.loads(text.strip())
+            ai_bullets["summary"] = parsed.get("summary")
+            ai_bullets["experiences"] = parsed.get("experiences", {}) or {}
+            ai_bullets["tips"] = parsed.get("tips", []) or []
+        except Exception as e:
+            logger.warning("CV AI enrichment failed: %s", e)
+
+    pdf_bytes = _build_cv_pdf(req.model_dump(), ai_bullets)
+    safe_name = req.name.replace(" ", "_") or "cv"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="OneSmart_CV_{safe_name}.pdf"'},
+    )
+
+
+# ============== REMINDER DISPATCHER ==============
+def _next_recurrence(dt: datetime, recurrence: str) -> Optional[datetime]:
+    if recurrence == "daily":
+        return dt + timedelta(days=1)
+    if recurrence == "weekly":
+        return dt + timedelta(weeks=1)
+    if recurrence == "monthly":
+        # naive +30d (good enough for reminders)
+        return dt + timedelta(days=30)
+    return None
+
+
+async def _send_push_to_user(user_id: str, payload: dict) -> int:
+    from pywebpush import webpush, WebPushException
+    subs = await db.push_subs.find({"user_id": user_id}, {"_id": 0}).to_list(50)
+    sent = 0
+    for s in subs:
+        try:
+            webpush(
+                subscription_info={"endpoint": s["endpoint"], "keys": s["keys"]},
+                data=json.dumps(payload),
+                vapid_private_key=VAPID_PRIVATE_KEY_PEM,
+                vapid_claims={"sub": f"mailto:{VAPID_CLAIM_EMAIL}"},
+            )
+            sent += 1
+        except WebPushException as e:
+            # Cleanup gone subscriptions
+            if "410" in str(e) or "404" in str(e):
+                await db.push_subs.delete_one({"endpoint": s["endpoint"]})
+            logger.warning("push failed: %s", e)
+    return sent
+
+
+async def reminder_loop():
+    """Background task: every 30s, scan due reminders and send push notifications."""
+    await asyncio.sleep(5)
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            cursor = db.notes.find({
+                "reminder_at": {"$ne": None, "$lte": now.isoformat()},
+                "$or": [{"reminder_sent_at": {"$exists": False}}, {"reminder_sent_at": None}],
+            }, {"_id": 0})
+            due = await cursor.to_list(200)
+            for note in due:
+                payload = {
+                    "title": f"⏰ {note.get('title','Reminder')}",
+                    "body": note.get("content") or (note.get("items", [{}])[0].get("text") if note.get("items") else "Reminder dari One Smart"),
+                    "icon": "/icon-192.png",
+                    "url": "/app/quick",
+                }
+                try:
+                    await _send_push_to_user(note["user_id"], payload)
+                except Exception as e:
+                    logger.warning("dispatch err: %s", e)
+
+                recurrence = note.get("recurrence")
+                update = {"reminder_sent_at": now.isoformat()}
+                if recurrence and recurrence != "none":
+                    try:
+                        cur_dt = datetime.fromisoformat(note["reminder_at"].replace("Z", "+00:00"))
+                        nxt = _next_recurrence(cur_dt, recurrence)
+                        if nxt:
+                            # ensure future
+                            while nxt <= now:
+                                nxt = _next_recurrence(nxt, recurrence)
+                            update["reminder_at"] = nxt.isoformat()
+                            update["reminder_sent_at"] = None  # rearm
+                    except Exception as e:
+                        logger.warning("recurrence calc fail: %s", e)
+                await db.notes.update_one({"id": note["id"]}, {"$set": update})
+        except Exception as e:
+            logger.exception("reminder_loop error: %s", e)
+        await asyncio.sleep(30)
+
+
 # ============== BOOT ==============
 @app.on_event("startup")
 async def startup():
     await ensure_default_user()
+    asyncio.create_task(reminder_loop())
+    logger.info("Reminder dispatcher started")
 
 
 @app.on_event("shutdown")

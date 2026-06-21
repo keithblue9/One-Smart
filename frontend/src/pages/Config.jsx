@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Lock, User, Globe, SignOut } from "@phosphor-icons/react";
+import { Lock, User, Globe, SignOut, Sun, Moon } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 
 export default function Config() {
-  const { user, lang, switchLang, logout, refresh } = useAuth();
+  const { user, lang, switchLang, logout, refresh, theme, switchTheme } = useAuth();
   const nav = useNavigate();
   const [oldPin, setOldPin] = useState("");
   const [newPin, setNewPin] = useState("");
@@ -88,6 +88,29 @@ export default function Config() {
             <Input data-testid="confirm-passcode" type="password" inputMode="numeric" maxLength={6} value={confPin} onChange={(e) => setConfPin(e.target.value.replace(/\D/g, ""))} className="bg-white" />
           </div>
           <Button data-testid="change-passcode-submit" onClick={changePin} className="bg-forest hover:bg-forest-hover">{t(lang, "save")}</Button>
+        </div>
+      </section>
+
+      <section className="card-base p-6 mb-5">
+        <div className="flex items-center gap-2 mb-4">
+          {theme === "dark" ? <Moon size={20} weight="duotone" className="text-bronze" /> : <Sun size={20} weight="duotone" className="text-bronze" />}
+          <h2 className="font-heading text-lg text-ink">{t(lang, "dark_mode")}</h2>
+        </div>
+        <div className="flex gap-2">
+          <button
+            data-testid="theme-light"
+            onClick={() => switchTheme("light")}
+            className={`flex-1 py-3 rounded-lg border flex items-center justify-center gap-2 ${theme === "light" ? "bg-forest text-white border-forest" : "bg-white text-ink-body border-[#E8E6E1]"}`}
+          >
+            <Sun size={16} weight="fill" /> {t(lang, "light")}
+          </button>
+          <button
+            data-testid="theme-dark"
+            onClick={() => switchTheme("dark")}
+            className={`flex-1 py-3 rounded-lg border flex items-center justify-center gap-2 ${theme === "dark" ? "bg-forest text-white border-forest" : "bg-white text-ink-body border-[#E8E6E1]"}`}
+          >
+            <Moon size={16} weight="fill" /> {t(lang, "dark")}
+          </button>
         </div>
       </section>
 
