@@ -1,0 +1,132 @@
+{
+  "app_name": "One Smart",
+  "theme_archetype": {
+    "name": "Archetype 1: Organic & Earthy",
+    "mode": "Light Theme",
+    "reasoning": "Fits a 40-year-old professional user. Earthy and sophisticated palette creates a premium, mature personal app feel. Avoids neon/cyber tech aesthetics and generic 'SaaS blue', grounding the user in calm productivity."
+  },
+  "colors": {
+    "background": {
+      "main": "#F9F8F6",
+      "description": "Pale Linen - used for the main app background to reduce eye strain."
+    },
+    "surface": {
+      "card": "#FFFFFF",
+      "alt": "#F3EFEA",
+      "description": "White for main content cards, Stone for secondary panels and AI insight blocks."
+    },
+    "primary": {
+      "default": "#2C4A3B",
+      "hover": "#1E3328",
+      "description": "Deep Forest Green - used for primary CTAs, active bottom nav items, and structural elements."
+    },
+    "ai_accent": {
+      "default": "#B76E38",
+      "bg_light": "rgba(183, 110, 56, 0.1)",
+      "description": "Phosphor Bronze / Soft Terracotta. strictly NO PURPLE for AI. AI should feel like a crafted, premium insight. Use this for AI buttons, AI icons, and AI text highlights."
+    },
+    "text": {
+      "heading": "#1A1918",
+      "body": "#3A3937",
+      "muted": "#767470"
+    },
+    "border": {
+      "default": "#E8E6E1",
+      "focus": "#2C4A3B"
+    }
+  },
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "scales": {
+      "h1": "text-4xl tracking-tight font-medium",
+      "h2": "text-2xl tracking-tight font-medium",
+      "h3": "text-xl font-medium",
+      "card_title": "text-lg font-medium",
+      "body": "text-base leading-relaxed",
+      "small_label": "text-xs uppercase tracking-[0.1em] font-semibold text-[#767470]"
+    },
+    "notes": "No Inter or generic sans for headings. Emphasize a modern editorial feel."
+  },
+  "spacing_and_layout": {
+    "general": "Generous spacing. Containers with borders must have internal padding (p-6).",
+    "mobile_navigation": "Bottom Navigation Bar with 5 icons (Education, Job, Investment, World, Quick Action). Fixed at bottom, backdrop-blur-xl bg-white/80.",
+    "desktop_navigation": "Left Sidebar, w-64, solid background.",
+    "grid_system": "Mode B 'Control Room'. grid-cols-1 on mobile. On desktop, grid-cols-3 or grid-cols-4. gap-6.",
+    "cards": "Neumorphism tactile variant but very clean: Flat solid surface (#FFFFFF), subtle 1px border border-[#E8E6E1], rounded-2xl. Soft ambient shadow only on hover shadow-sm."
+  },
+  "modules_design": {
+    "login": {
+      "layout": "Clean, distraction-free center alignment. Large numeric keypad. No generic imagery.",
+      "features": "6-digit passcode dots, toggle ID/EN language top right."
+    },
+    "education": {
+      "layout": "List of scholarship cards.",
+      "card_elements": "University image, deadline label, benefits, age limit filter. Prominent 'AI Insight' bronze button."
+    },
+    "job": {
+      "layout": "Dense list view or compact cards.",
+      "card_elements": "Company logo slot, salary range, role. AI salary insight panel."
+    },
+    "investment": {
+      "layout": "Dashboard grid.",
+      "elements": "Market overview (IHSG, Kurs, Emas) top row widgets. Stock cards with sparkline charts. AI Strategy highlights."
+    },
+    "our_world": {
+      "layout": "Editorial news feed. Image on top, large serif/Outfit heading, muted date.",
+      "categories": "Horizontal scrollable pill filters (Geopolitics, Tech, Best Cities, Culinary)."
+    },
+    "quick_action": {
+      "layout": "Minimalist Todo list.",
+      "elements": "Custom checkbox, numbering/bullets, reminder toggle switch."
+    }
+  },
+  "components": {
+    "libraries": [
+      "shadcn/ui (Buttons, Dialog, Input, Tabs, Switch, Slider, Card)",
+      "@phosphor-icons/react (Duotone style for premium feel)"
+    ],
+    "customizations": {
+      "ai_insight_panel": "bg-[#B76E38]/5 border border-[#B76E38]/20 rounded-xl p-4 flex gap-3 text-[#3A3937] text-sm",
+      "ai_button": "border border-[#B76E38] text-[#B76E38] hover:bg-[#B76E38] hover:text-white rounded-full px-4 py-1.5 text-sm transition-all"
+    }
+  },
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://images.pexels.com/photos/15960098/pexels-photo-15960098.jpeg",
+        "category": "our_world_jakarta",
+        "description": "Jakarta morning skyline - use for the 'Info Jakarta' news card"
+      },
+      {
+        "url": "https://images.pexels.com/photos/27288569/pexels-photo-27288569.jpeg",
+        "category": "investment_chart",
+        "description": "Stock market chart - use as a visual header or widget background for the Investment tab"
+      },
+      {
+        "url": "https://images.pexels.com/photos/31656148/pexels-photo-31656148.jpeg",
+        "category": "education_university",
+        "description": "Modern university building - use for a prominent Master's scholarship card"
+      }
+    ]
+  },
+  "testing": {
+    "rules": "All interactive and key informational elements MUST include a data-testid attribute.",
+    "examples": {
+      "login_input": "data-testid='passcode-input'",
+      "login_submit": "data-testid='login-submit-button'",
+      "ai_button": "data-testid='ai-insight-button'",
+      "nav_item": "data-testid='nav-[category]-button'"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Use Tailwind config to add the custom colors: 'linen': '#F9F8F6', 'forest': '#2C4A3B', 'bronze': '#B76E38'.",
+    "Install and use @phosphor-icons/react for icons.",
+    "Ensure 'Outfit' is loaded for headings and 'Manrope' for body text via Google Fonts.",
+    "Do NOT use pure purple or teal anywhere. Rely on the Forest Green and Phosphor Bronze palette.",
+    "Build a mobile-first layout with a sticky bottom navigation bar. On lg breakpoints, convert to a left sidebar.",
+    "Ensure all Shadcn components are stripped of their default 'Vercel' look (e.g., replace default ring colors with forest green, adjust border radii).",
+    "Implement the 6-digit passcode screen as the initial view. Default pin is 991285.",
+    "All media MUST use the URLs provided in the media section. Do not use placehold.it or dummy images."
+  ]
+}
