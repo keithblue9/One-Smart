@@ -263,7 +263,13 @@ async def alternatives():
 
 @api.get("/investment/market-overview")
 async def market_overview():
-    """Live data: USD/IDR via exchangerate.host, BTC via CoinGecko, plus curated IHSG, Emas."""
+    """Live data: USD/IDR via frankfurter, BTC/ETH via CoinGecko (60s cache), plus curated IHSG, Emas."""
+    # 60s in-memory cache
+    cache = getattr(market_overview, "_cache", None)
+    now = datetime.now(timezone.utc)
+    if cache and (now - cache["t"]).total_seconds() < 60:
+        return cache["data"]
+
     result = {
         "usd_idr": None,
         "ihsg": {"value": 7382.5, "change_pct": 0.42, "source": "Curated"},
@@ -275,14 +281,22 @@ async def market_overview():
     }
     try:
         async with httpx.AsyncClient(timeout=8.0) as hx:
-            # USD/IDR
+            # USD/IDR (no-key sources: frankfurter primary, open.er-api fallback)
             try:
-                r = await hx.get("https://api.exchangerate.host/latest", params={"base": "USD", "symbols": "IDR"})
+                r = await hx.get("https://api.frankfurter.dev/v1/latest", params={"base": "USD", "symbols": "IDR"})
                 d = r.json()
                 if d.get("rates", {}).get("IDR"):
-                    result["usd_idr"] = {"value": d["rates"]["IDR"], "source": "exchangerate.host"}
+                    result["usd_idr"] = {"value": d["rates"]["IDR"], "source": "frankfurter.dev"}
             except Exception as e:
-                logger.warning("USD/IDR failed: %s", e)
+                logger.warning("Frankfurter failed: %s", e)
+            if not result["usd_idr"]:
+                try:
+                    r = await hx.get("https://open.er-api.com/v6/latest/USD")
+                    d = r.json()
+                    if d.get("rates", {}).get("IDR"):
+                        result["usd_idr"] = {"value": d["rates"]["IDR"], "source": "open.er-api"}
+                except Exception as e:
+                    logger.warning("open.er-api failed: %s", e)
             # Crypto via CoinGecko
             try:
                 r = await hx.get(
@@ -304,6 +318,19 @@ async def market_overview():
         result["usd_idr"] = {"value": 15850, "source": "Cached estimate"}
     if not result["gold_usd_oz"]:
         result["gold_usd_oz"] = {"value": 2680, "change_pct": 0.0, "source": "Curated"}
+    if not result["btc_usd"]:
+        # Fallback if CoinGecko rate-limits (last known good)
+        prev = getattr(market_overview, "_last_crypto", None)
+        if prev:
+            result["btc_usd"] = prev.get("btc_usd")
+            result["eth_usd"] = prev.get("eth_usd")
+        else:
+            result["btc_usd"] = {"value": 64000, "change_pct": 0.0, "source": "Cached estimate"}
+            result["eth_usd"] = {"value": 1720, "change_pct": 0.0, "source": "Cached estimate"}
+    else:
+        market_overview._last_crypto = {"btc_usd": result["btc_usd"], "eth_usd": result["eth_usd"]}
+
+    market_overview._cache = {"t": now, "data": result}
     return result
 
 

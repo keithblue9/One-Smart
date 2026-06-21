@@ -6,7 +6,7 @@ import { t } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 
@@ -169,6 +169,7 @@ export default function Quick() {
         <DialogContent className="bg-white max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="font-heading">{editing?.id ? "Edit" : t(lang, "new_note")}</DialogTitle>
+            <DialogDescription className="text-xs text-ink-muted">{lang === "id" ? "Atur judul, item, dan reminder" : "Set title, items, and reminder"}</DialogDescription>
           </DialogHeader>
           {editing && (
             <div className="space-y-4">

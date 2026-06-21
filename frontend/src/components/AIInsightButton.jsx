@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Sparkle, ArrowRight, X } from "@phosphor-icons/react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
@@ -46,6 +46,9 @@ export default function AIInsightButton({ topic, context, label, testId = "ai-in
               <Sparkle size={20} weight="fill" className="text-[#B76E38]" />
               {t(lang, "ai_insight")}
             </DialogTitle>
+            <DialogDescription className="text-xs text-ink-muted">
+              Powered by Claude Sonnet 4.5
+            </DialogDescription>
           </DialogHeader>
           <div className="mt-2">
             {loading && (
