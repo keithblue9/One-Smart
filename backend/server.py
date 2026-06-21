@@ -17,7 +17,7 @@ import json
 import asyncio
 import httpx
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from anthropic import AsyncAnthropic
 
 from data_store import (
     SCHOLARSHIPS,
@@ -42,7 +42,9 @@ MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 DEFAULT_PASSCODE = os.environ.get("DEFAULT_PASSCODE", "991285")
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+AI_MODEL = "claude-sonnet-4-5-20250929"
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY_PEM = os.environ.get("VAPID_PRIVATE_KEY_PEM", "").replace("\\n", "\n")
 VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "admin@onesmart.app")
@@ -392,7 +394,7 @@ INSIGHT_PROMPTS = {
 @api.post("/ai/insight")
 async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     """Generate AI insight via Claude Sonnet 4.5. Cached in MongoDB per (topic, context_hash)."""
-    if not EMERGENT_LLM_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     context_str = json.dumps(req.context, ensure_ascii=False, sort_keys=True)
@@ -406,17 +408,16 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
     system_msg = f"Anda asisten ahli yang memberi insight tajam, akurat, terstruktur. Selalu jawab dalam {lang_label}."
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=str(uuid.uuid4()),
-        system_message=system_msg,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-
     try:
-        # Use non-streaming send_message — we need the full response cached
+        # Use non-streaming call — we need the full response cached
         # (streaming would complicate caching; for UX we accept short wait)
-        response = await chat.send_message(UserMessage(text=prompt))
-        insight_text = response if isinstance(response, str) else str(response)
+        response = await anthropic_client.messages.create(
+            model=AI_MODEL,
+            max_tokens=2000,
+            system=system_msg,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        insight_text = response.content[0].text
     except Exception as e:
         logger.exception("AI insight failed")
         raise HTTPException(500, f"AI error: {e}")
@@ -654,7 +655,7 @@ async def cv_generate(req: CVRequest, user: dict = Depends(get_user)):
     from fastapi.responses import Response
 
     ai_bullets = {"experiences": {}, "tips": [], "summary": None}
-    if EMERGENT_LLM_KEY:
+    if ANTHROPIC_API_KEY:
         lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
         prompt = (
             "Anda adalah CV writer profesional ATS-optimized. Berdasarkan data berikut:\n"
@@ -673,13 +674,13 @@ async def cv_generate(req: CVRequest, user: dict = Depends(get_user)):
             f"Bahasa: {lang_label}. Output STRICT JSON only."
         )
         try:
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=str(uuid.uuid4()),
-                system_message="You output strict JSON only.",
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-            raw = await chat.send_message(UserMessage(text=prompt))
-            text = raw if isinstance(raw, str) else str(raw)
+            response = await anthropic_client.messages.create(
+                model=AI_MODEL,
+                max_tokens=1500,
+                system="You output strict JSON only.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text
             # strip code fences if any
             if "```" in text:
                 text = text.split("```")[1]
