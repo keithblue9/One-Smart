@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "@hookform/resolvers": "5.0.1",
+    "@phosphor-icons/react": "^2.1.10",
     "@radix-ui/react-accordion": "1.2.8",
     "@radix-ui/react-alert-dialog": "1.1.11",
     "@radix-ui/react-aspect-ratio": "1.1.4",
@@ -95,6 +96,7 @@
     "tailwindcss": "3.4.17"
   },
   "resolutions": {
+    "webpack-dev-server": "4.15.2",
     "react-router": "7.15.0",
     "node-forge": "1.4.0",
     "fast-uri": "3.1.2",
@@ -113,7 +115,6 @@
     "serialize-javascript": "7.0.5",
     "uuid": "11.1.1",
     "@tootallnate/once": "2.0.1",
-    "webpack-dev-server": "5.2.4",
     "resolve-url-loader": "5.0.0",
     "**/resolve-url-loader/postcss": "8.5.10",
     "**/axios/form-data": "4.0.4",

@@ -1,0 +1,48 @@
+{
+  "summary": "First-iteration full-stack testing of One Smart PWA. Backend: 33/33 pytest cases passed (auth, education, job, investment market overview, world endpoints, notes CRUD, push, AI insight via Claude Sonnet 4.5 with cache verification). Frontend: 43/43 Playwright assertions passed on desktop (1280x800) and 7/7 mobile-nav checks on mobile (375x812). Login flow (passcode 991285 success + 000000 error), Hub tiles, all 5 module pages with their tabs/lists, scholarship list (16 items) + AI Insight dialog, Note CRUD with bullet/numbered/plain + reminder + recurrence + save, Config language toggle ID<->EN all work. One real frontend bug found: BTC and ETH chips on Hub render as em-dash even though backend returns valid values. Several minor non-blocking issues noted.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/investment/market-overview", "issue": "USD/IDR falls back to 'Cached estimate' because api.exchangerate.host returns no rates (no API key) — value 15850 is hard-coded fallback, not live."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Hub.jsx market-overview chips", "issue": "BTC and ETH chips display em-dash '—' even though /api/investment/market-overview returns valid btc_usd.value=63979 and eth_usd.value=1720.81. Likely the Hub component is reading a wrong key or expects different shape (e.g. nested under .price instead of .value).", "selector": "Hub market chips for BTC / ETH", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Education AI Insight dialog & Quick new-note dialog", "issues": ["Radix DialogContent missing aria-describedby / DialogDescription — accessibility warning in console (non-blocking)."]},
+      {"screen": "Job — Top Companies cards", "issues": ["Multiple ERR_NAME_NOT_RESOLVED console errors when loading company logos (external image hosts blocked in sandbox). UI still renders, but consider local SVG/initials fallback."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix Hub.jsx BTC/ETH chips — verify it reads market.btc_usd.value and market.eth_usd.value (and change_pct). Backend already returns them correctly.",
+    "Add DialogDescription / aria-describedby to all shadcn Dialog components for a11y.",
+    "Consider local fallback (initials avatar) for company logos that 404/DNS-fail.",
+    "(Optional) Wire USD/IDR to a key-less live source (e.g. Frankfurter / ECB) so it's not always the cached 15850 fallback."
+  ],
+  "critical_code_review_comments": [
+    "server.py: /api/notes is missing a GET-by-id endpoint — only list / create / patch / delete. Not blocking, but typical REST hygiene.",
+    "server.py: change-passcode does not invalidate existing JWTs (no token version bump). Low risk for single-user PWA, but worth noting.",
+    "server.py: AI cache key uses passcode-less sha256 and is global; if multiple users existed this would leak across them — acceptable here because singleton 'default' user.",
+    "server.py uses @app.on_event('startup') which is deprecated in Starlette/FastAPI (use lifespan handlers). Functional now but will need migration.",
+    "Frontend hub.jsx (suspected) reads wrong path for crypto chips — see ui_bug above."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_backend.py (new)",
+    "/app/backend/tests/conftest.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "98%"},
+  "test_credentials": "Passcode 991285 (from /app/memory/test_credentials.md). After tests, profile DOB was set to 1986-01-01 to verify age eligibility filter (MEXT becomes ineligible at age 40). Profile name restored to 'One Smart'.",
+  "seed_data_creation": "Tests create & clean up a TEST_NOTE_* note inside test_notes_crud_flow. test_subscribe_with_auth leaves one push_subs row (endpoint https://test.example.com/push/TEST_endpoint) in DB — harmless dummy, can be ignored or purged manually.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All backend endpoints functional. Only frontend Hub crypto-chip rendering bug remains. Re-run /app/backend/tests/test_backend.py for regression (≈18 s, 33 cases). For UI, focus on Hub market chips after fix. Note: DOB was set to 1986-01-01 by tests; reset via /api/auth/profile if needed for further age-filter testing. AI insight first call ≈ 8-12 s, subsequent cached calls instant.",
+  "rca of the issue": "Hub BTC/ETH chips render '—': backend /api/investment/market-overview returns btc_usd={value:63979, change_pct:1.18}, eth_usd={value:1720.81, change_pct:0.65}. Frontend Hub.jsx is most likely accessing market.btc?.price or market.btc?.usd instead of market.btc_usd?.value. Reproduction: login then look at Hub – IHSG/USD-IDR/EMAS chips show numbers but BTC/ETH show em-dash. Mitigation: open /app/frontend/src/pages/Hub.jsx, ensure the chip components read market.btc_usd?.value and market.eth_usd?.value with formatNumber, plus market.btc_usd?.change_pct for the delta line."
+}
