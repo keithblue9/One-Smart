@@ -150,6 +150,16 @@ export default function World() {
   const [travel] = useState(TRAVEL_RICH);
   const [owid] = useState(OWID_RICH);
   const [newsLoading, setNewsLoading] = useState(true);
+  const [jakarta, setJakarta] = useState([]);
+  const [jakLoading, setJakLoading] = useState(false);
+
+  const fetchJakarta = () => {
+    setJakLoading(true);
+    api.get("/world/jakarta-live")
+      .then(r => setJakarta(r.data.items || []))
+      .catch(() => setJakarta([]))
+      .finally(() => setJakLoading(false));
+  };
 
   useEffect(() => {
     setNewsLoading(true);
@@ -172,6 +182,7 @@ export default function World() {
           <TabsTrigger value="owid" className="rounded-lg text-xs">{lang==="id"?"📊 Tren Dunia":"📊 Global Trends"}</TabsTrigger>
           <TabsTrigger value="cities" className="rounded-lg text-xs">{lang==="id"?"🏙️ Kota Terbaik":"🏙️ Best Cities"}</TabsTrigger>
           <TabsTrigger value="travel" className="rounded-lg text-xs">{lang==="id"?"✈️ Travel Indonesia":"✈️ Indonesia Travel"}</TabsTrigger>
+          <TabsTrigger value="jakarta" className="rounded-lg text-xs" onClick={fetchJakarta}>{lang==="id"?"🏙️ Hari Ini di Jakarta":"🏙️ Today in Jakarta"}</TabsTrigger>
         </TabsList>
 
         {/* NEWS */}
@@ -344,6 +355,48 @@ export default function World() {
               </article>
             ))}
           </div>
+        </TabsContent>
+        {/* JAKARTA */}
+        <TabsContent value="jakarta" className="mt-5">
+          <div className="mb-4 p-4 bg-red-50 rounded-xl border border-red-100">
+            <p className="text-xs text-red-700 font-medium">🏙️ {lang==="id"?"Informasi Jakarta hari ini — event, agenda, transportasi, dan update kota — dihasilkan AI dengan data terkini.":"Jakarta today — events, agenda, transport, and city updates — AI-generated with live data."}</p>
+          </div>
+          {jakLoading ? (
+            <div className="space-y-3">{[1,2,3,4].map(i=><div key={i} className="h-24 bg-slate-100 rounded-2xl animate-pulse"/>)}</div>
+          ) : jakarta.length === 0 ? (
+            <div className="text-center py-12">
+              <div className="text-4xl mb-3">🏙️</div>
+              <p className="text-slate-600 font-medium mb-2">{lang==="id"?"Tap untuk memuat info Jakarta hari ini":"Tap to load today's Jakarta info"}</p>
+              <p className="text-xs text-slate-400 mb-4">{lang==="id"?"AI akan mencari event, agenda, transportasi & info terkini":"AI will search for events, agenda, transport & latest info"}</p>
+              <button onClick={fetchJakarta} className="px-5 py-2.5 bg-[#2c4a3b] text-white rounded-xl text-sm font-medium hover:bg-[#1e3328] transition-colors">
+                {lang==="id"?"🔍 Muat Info Jakarta":"🔍 Load Jakarta Info"}
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div className="space-y-3">
+                {jakarta.map((j,i)=>(
+                  <article key={i} className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm">
+                    <div className="flex items-start gap-3">
+                      <div className="text-2xl flex-shrink-0">{j.emoji || "📌"}</div>
+                      <div className="flex-1">
+                        <div className="flex items-start justify-between gap-2 flex-wrap">
+                          <h3 className="font-bold text-slate-800">{j.title}</h3>
+                          {j.category && <span className={`text-[11px] px-2 py-0.5 rounded-full ${catColor[j.category]||"bg-slate-100 text-slate-500"}`}>{j.category}</span>}
+                        </div>
+                        {j.date && <div className="text-xs text-slate-400 mt-0.5">📅 {j.date} {j.location && `· 📍 ${j.location}`}</div>}
+                        <p className="text-sm text-slate-600 mt-1.5 leading-relaxed">{j.summary || j.description}</p>
+                        {j.tip && <div className="mt-2 text-xs bg-amber-50 text-amber-700 px-3 py-1.5 rounded-lg">💡 {j.tip}</div>}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <button onClick={fetchJakarta} className="mt-4 w-full py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:text-slate-700 hover:border-slate-300 transition-colors">
+                🔄 {lang==="id"?"Refresh Info Jakarta":"Refresh Jakarta Info"}
+              </button>
+            </div>
+          )}
         </TabsContent>
       </Tabs>
     </div>

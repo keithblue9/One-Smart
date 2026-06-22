@@ -271,23 +271,25 @@ export default function Hub() {
         <SH icon={Globe} label={lang==="id"?"Tren Global — Our World in Data":"Global Trends — Our World in Data"} sub={lang==="id"?"Data & proyeksi dunia yang penting kamu tahu":"Global data & projections you need to know"}/>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
           {OWID_CHARTS.map(c=>(
-            <div key={c.title} className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm">
-              <h3 className="text-xs font-bold text-slate-700 leading-snug mb-1">{c.title}</h3>
-              <p className="text-[11px] text-slate-400 mb-3">{c.insight}</p>
-              <ResponsiveContainer width="100%" height={90}>
-                <AreaChart data={c.data} margin={{top:0,right:0,left:-32,bottom:0}}>
-                  <defs>
-                    <linearGradient id={`owid${c.color}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={c.color} stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor={c.color} stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="year" tick={{fontSize:9,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
-                  <YAxis tick={{fontSize:9,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
-                  <Tooltip formatter={v=>`${v}${c.unit}`} contentStyle={{fontSize:10,borderRadius:6}}/>
-                  <Area type="monotone" dataKey="val" stroke={c.color} strokeWidth={2} fill={`url(#owid${c.color})`} dot={false}/>
-                </AreaChart>
-              </ResponsiveContainer>
+            <div key={c.title} className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm flex flex-col gap-2">
+              <h3 className="text-xs font-bold text-slate-700 leading-snug">{c.title}</h3>
+              <p className="text-[11px] text-slate-500 leading-relaxed" style={{display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{c.insight}</p>
+              <div style={{height:"110px"}}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={c.data} margin={{top:4,right:4,left:0,bottom:0}}>
+                    <defs>
+                      <linearGradient id={`og${c.title.slice(0,4)}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={c.color} stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor={c.color} stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="year" tick={{fontSize:8,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
+                    <YAxis tick={{fontSize:8,fill:"#94a3b8"}} axisLine={false} tickLine={false} width={26}/>
+                    <Tooltip formatter={v=>`${v}${c.unit}`} contentStyle={{fontSize:10,borderRadius:6}}/>
+                    <Area type="monotone" dataKey="val" stroke={c.color} strokeWidth={2} fill={`url(#og${c.title.slice(0,4)})`} dot={false}/>
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           ))}
         </div>
