@@ -800,6 +800,20 @@ async def root():
     return {"app": "One Smart", "status": "ok"}
 
 
+@api.get("/debug/passcode")
+async def debug_passcode():
+    user = await db.users.find_one({"id": "default"}, {"_id": 0, "passcode_hash": 1})
+    expected = hash_passcode(DEFAULT_PASSCODE)
+    return {
+        "stored_hash": user.get("passcode_hash") if user else None,
+        "expected_hash": expected,
+        "match": user.get("passcode_hash") == expected if user else False,
+        "user_exists": user is not None,
+        "default_passcode": DEFAULT_PASSCODE,
+        "jwt_secret_prefix": JWT_SECRET[:8] + "...",
+    }
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
