@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   },
   "dependencies": {
+    "ajv": "^8.0.0",
     "@hookform/resolvers": "5.0.1",
     "@phosphor-icons/react": "^2.1.10",
     "@radix-ui/react-accordion": "1.2.8",
