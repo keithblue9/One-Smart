@@ -279,7 +279,7 @@ async def market_overview():
 
     result = {
         "usd_idr": None,
-        "ihsg": {"value": 7382.5, "change_pct": 0.42, "source": "Curated"},
+        "ihsg": None,
         "gold_usd_oz": None,
         "gold_idr_gram": None,
         "btc_usd": None,
@@ -288,6 +288,22 @@ async def market_overview():
     }
     try:
         async with httpx.AsyncClient(timeout=8.0) as hx:
+            # IHSG via Yahoo Finance unofficial endpoint (no API key)
+            try:
+                r = await hx.get(
+                    "https://query1.finance.yahoo.com/v8/finance/chart/%5EJKSE",
+                    params={"interval": "1d", "range": "5d"},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                d = r.json()
+                meta = d["chart"]["result"][0]["meta"]
+                price = meta.get("regularMarketPrice") or meta.get("previousClose")
+                prev = meta.get("previousClose") or meta.get("chartPreviousClose")
+                change_pct = ((price - prev) / prev * 100) if prev and price else 0
+                result["ihsg"] = {"value": round(price, 2), "change_pct": round(change_pct, 2), "source": "Yahoo Finance"}
+            except Exception as e:
+                logger.warning("IHSG fetch failed: %s", e)
+                result["ihsg"] = {"value": 7382.5, "change_pct": 0.0, "source": "Cached estimate"}
             # USD/IDR (no-key sources: frankfurter primary, open.er-api fallback)
             try:
                 r = await hx.get("https://api.frankfurter.dev/v1/latest", params={"base": "USD", "symbols": "IDR"})
@@ -333,6 +349,8 @@ async def market_overview():
             "change_pct": result["gold_usd_oz"].get("change_pct", 0),
             "source": "Derived (PAX Gold x USD/IDR)",
         }
+    if not result["ihsg"]:
+        result["ihsg"] = {"value": 7382.5, "change_pct": 0.0, "source": "Cached estimate"}
     if not result["gold_idr_gram"]:
         result["gold_idr_gram"] = {"value": 2668000, "change_pct": 0.0, "source": "Cached estimate"}
     if not result["btc_usd"]:
