@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   GraduationCap, Briefcase, ChartLineUp, Globe, NotePencil,
-  BookmarkSimple, ArrowRight, TrendUp, TrendDown, Sparkle,
+  BookmarkSimple, ArrowRight, TrendUp, TrendDown, Sparkle, X, ArrowSquareOut,
 } from "@phosphor-icons/react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -176,6 +176,128 @@ const tiles = [
     desc_en:"Save interesting content from across One Smart — scholarships, stocks, cities, news — all in one organized place." },
 ];
 
+// ── OWID Section with clickable detail modal ──────────────────────────────────
+function OwidSection({ lang }) {
+  const [selected, setSelected] = useState(null);
+
+  return (
+    <>
+      {/* 3 chart cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        {OWID_CHARTS.map((c, i) => (
+          <button key={i} onClick={() => setSelected(c)}
+            className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm text-left hover:shadow-md hover:border-slate-200 transition-all group cursor-pointer w-full">
+            {/* Title row */}
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <h3 className="text-xs font-bold text-slate-700 leading-snug flex-1">{c.title}</h3>
+              <ArrowSquareOut size={13} className="text-slate-300 group-hover:text-slate-500 flex-shrink-0 mt-0.5 transition-colors"/>
+            </div>
+            {/* Insight — max 2 lines */}
+            <p className="text-[11px] text-slate-500 leading-relaxed mb-3 overflow-hidden" style={{display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>
+              {c.insight}
+            </p>
+            {/* Chart — fixed 120px, no text overlap */}
+            <div style={{height:120}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={c.data} margin={{top:4,right:4,left:0,bottom:0}}>
+                  <defs>
+                    <linearGradient id={`owg${i}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={c.color} stopOpacity={0.25}/>
+                      <stop offset="95%" stopColor={c.color} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="year" tick={{fontSize:8,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{fontSize:8,fill:"#94a3b8"}} axisLine={false} tickLine={false} width={26}/>
+                  <Tooltip formatter={v=>`${v}${c.unit}`} contentStyle={{fontSize:10,borderRadius:6}}/>
+                  <Area type="monotone" dataKey="val" stroke={c.color} strokeWidth={2} fill={`url(#owg${i})`} dot={false}/>
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-2 text-[10px] font-semibold" style={{color:c.color}}>
+              {lang==="id"?"Tap untuk detail →":"Tap for details →"}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Progress bars */}
+      <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+        <h3 className="text-sm font-bold text-slate-700 mb-0.5">{lang==="id"?"Kemajuan Kemanusiaan Global":"Global Human Progress"}</h3>
+        <p className="text-xs text-slate-400 mb-4">{lang==="id"?"% target tercapai sejak 1990 — dunia lebih baik dari yang dikira":"% of target achieved since 1990 — the world is better than you think"}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
+          {RADIAL_DATA.map(d => (
+            <div key={d.name}>
+              <div className="flex justify-between items-center mb-1.5">
+                <span className="text-xs text-slate-600">{d.name}</span>
+                <span className="text-sm font-bold" style={{color:d.fill}}>{d.val}%</span>
+              </div>
+              <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                <div className="h-full rounded-full" style={{width:`${d.val}%`,background:d.fill,transition:"width 1s ease"}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-slate-400 mt-4">*{lang==="id"?"Skala relatif terhadap baseline 1990. Sumber: Our World in Data.":"Scale relative to 1990 baseline. Source: Our World in Data."}</p>
+      </div>
+
+      {/* Detail modal */}
+      {selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={()=>setSelected(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-start justify-between p-5 border-b border-slate-100">
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Our World in Data</div>
+                <h2 className="font-bold text-slate-800 text-lg leading-snug">{selected.title}</h2>
+              </div>
+              <button onClick={()=>setSelected(null)} className="text-slate-400 hover:text-slate-600 ml-3 flex-shrink-0 mt-1"><X size={20}/></button>
+            </div>
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-3 p-5 pb-0">
+              <div className="bg-slate-50 rounded-xl p-3">
+                <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">Saat Ini</div>
+                <div className="font-bold text-slate-700">{selected.current || selected.data[selected.data.length-2]?.val + selected.unit}</div>
+              </div>
+              <div className="bg-slate-50 rounded-xl p-3" style={{borderLeft:`3px solid ${selected.color}`}}>
+                <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">Proyeksi 2029</div>
+                <div className="font-bold" style={{color:selected.color}}>{selected.data[selected.data.length-1]?.val}{selected.unit}</div>
+              </div>
+            </div>
+            {/* Chart big */}
+            <div className="px-5 pt-4" style={{height:200}}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={selected.data} margin={{top:4,right:4,left:0,bottom:0}}>
+                  <defs>
+                    <linearGradient id="modalGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={selected.color} stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor={selected.color} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="year" tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
+                  <YAxis tick={{fontSize:10,fill:"#94a3b8"}} axisLine={false} tickLine={false} width={32}/>
+                  <Tooltip formatter={v=>`${v}${selected.unit}`} contentStyle={{fontSize:11,borderRadius:8}}/>
+                  <Area type="monotone" dataKey="val" stroke={selected.color} strokeWidth={2.5} fill="url(#modalGrad)" dot={{r:3,fill:selected.color}}/>
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            {/* Detail text */}
+            <div className="p-5 pt-3 space-y-3">
+              <div>
+                <div className="text-[10px] font-bold uppercase text-slate-400 mb-1">📊 Analisa & Konteks</div>
+                <p className="text-sm text-slate-700 leading-relaxed">{selected.insight}</p>
+              </div>
+              <a href={`https://${selected.source}`} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline font-medium">
+                <ArrowSquareOut size={13}/> Baca data lengkap di {selected.source}
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function Hub() {
   const { user, lang } = useAuth();
@@ -268,59 +390,8 @@ export default function Hub() {
 
       {/* ── INFOGRAFIS: OWID DUNIA ── */}
       <section>
-        <SH icon={Globe} label={lang==="id"?"Tren Global — Our World in Data":"Global Trends — Our World in Data"} sub={lang==="id"?"Data & proyeksi dunia yang penting kamu tahu":"Global data & projections you need to know"}/>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-          {OWID_CHARTS.map(c=>(
-            <div key={c.title} className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm flex flex-col gap-2">
-              <h3 className="text-xs font-bold text-slate-700 leading-snug">{c.title}</h3>
-              <p className="text-[11px] text-slate-500 leading-relaxed" style={{display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{c.insight}</p>
-              <div style={{height:"110px"}}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={c.data} margin={{top:4,right:4,left:0,bottom:0}}>
-                    <defs>
-                      <linearGradient id={`og${c.title.slice(0,4)}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={c.color} stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor={c.color} stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="year" tick={{fontSize:8,fill:"#94a3b8"}} axisLine={false} tickLine={false}/>
-                    <YAxis tick={{fontSize:8,fill:"#94a3b8"}} axisLine={false} tickLine={false} width={26}/>
-                    <Tooltip formatter={v=>`${v}${c.unit}`} contentStyle={{fontSize:10,borderRadius:6}}/>
-                    <Area type="monotone" dataKey="val" stroke={c.color} strokeWidth={2} fill={`url(#og${c.title.slice(0,4)})`} dot={false}/>
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          ))}
-        </div>
-        {/* Radial progress */}
-        <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
-          <h3 className="text-sm font-bold text-slate-700 mb-1">{lang==="id"?"Kemajuan Kemanusiaan Global (% target tercapai)":"Global Human Progress (% of target achieved)"}</h3>
-          <p className="text-xs text-slate-400 mb-3">{lang==="id"?"Dunia lebih baik dari yang dikira — data Our World in Data":"The world is better than you think — Our World in Data"}</p>
-          <div className="flex flex-col sm:flex-row items-center gap-6">
-            <ResponsiveContainer width={200} height={200}>
-              <RadialBarChart cx="50%" cy="50%" innerRadius={25} outerRadius={90} data={RADIAL_DATA} startAngle={90} endAngle={-270}>
-                <RadialBar dataKey="val" cornerRadius={4} isAnimationActive/>
-                <Tooltip formatter={v=>`${v}%`} contentStyle={{fontSize:11,borderRadius:8}}/>
-                <Legend iconSize={10} iconType="circle" formatter={v=><span style={{fontSize:11,color:"#64748b"}}>{v}</span>}/>
-              </RadialBarChart>
-            </ResponsiveContainer>
-            <div className="flex-1 space-y-3">
-              {RADIAL_DATA.map(d=>(
-                <div key={d.name}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-600">{d.name}</span>
-                    <span className="font-bold" style={{color:d.fill}}>{d.val}%</span>
-                  </div>
-                  <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full rounded-full transition-all" style={{width:`${d.val}%`,background:d.fill}}/>
-                  </div>
-                </div>
-              ))}
-              <p className="text-[11px] text-slate-400 pt-1">{lang==="id"?"*Skala relatif terhadap baseline 1990":"*Scale relative to 1990 baseline"}</p>
-            </div>
-          </div>
-        </div>
+        <SH icon={Globe} label={lang==="id"?"Tren Global — Our World in Data":"Global Trends — Our World in Data"} sub={lang==="id"?"Klik kartu untuk baca detail & konteks Indonesia":"Click a card to read details & Indonesia context"}/>
+        <OwidSection lang={lang}/>
       </section>
 
       {/* ── FEATURE TILES ── */}

@@ -37,7 +37,7 @@ SCHOLARSHIPS = [
         "country": "Australia",
         "country_code": "AU",
         "degree": "S2",
-        "deadline": "2026-04-30",
+        "deadline": "2027-04-30",
         "age_min": 18,
         "age_max": 42,
         "benefits": [
@@ -118,7 +118,7 @@ SCHOLARSHIPS = [
         "country": "Europe (Multi)",
         "country_code": "EU",
         "degree": "S2",
-        "deadline": "2026-02-15",
+        "deadline": "2026-10-15",
         "age_min": 21,
         "age_max": None,
         "benefits": [
@@ -144,7 +144,7 @@ SCHOLARSHIPS = [
         "country": "United States",
         "country_code": "US",
         "degree": "S2",
-        "deadline": "2026-02-15",
+        "deadline": "2026-10-15",
         "age_min": 21,
         "age_max": None,
         "benefits": [
@@ -171,7 +171,7 @@ SCHOLARSHIPS = [
         "country": "Japan",
         "country_code": "JP",
         "degree": "S2",
-        "deadline": "2026-05-31",
+        "deadline": "2027-05-31",
         "age_min": 18,
         "age_max": 34,
         "benefits": [
@@ -196,7 +196,7 @@ SCHOLARSHIPS = [
         "country": "Sweden",
         "country_code": "SE",
         "degree": "S2",
-        "deadline": "2026-02-10",
+        "deadline": "2026-11-14",
         "age_min": 21,
         "age_max": None,
         "benefits": [
