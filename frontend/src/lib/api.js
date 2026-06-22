@@ -3,7 +3,7 @@ import axios from "axios";
 const BACKEND = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND}/api`;
 
-export const api = axios.create({ baseURL: API });
+export const api = axios.create({ baseURL: API, timeout: 90000 });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("os_token");
