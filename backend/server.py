@@ -320,21 +320,36 @@ async def market_overview():
                         result["usd_idr"] = {"value": d["rates"]["IDR"], "source": "open.er-api"}
                 except Exception as e:
                     logger.warning("open.er-api failed: %s", e)
-            # Crypto via CoinGecko
+            # BTC/ETH via Binance public API (no key, reliable)
+            try:
+                btc_r, eth_r = await asyncio.gather(
+                    hx.get("https://api.binance.com/api/v3/ticker/24hr", params={"symbol": "BTCUSDT"}),
+                    hx.get("https://api.binance.com/api/v3/ticker/24hr", params={"symbol": "ETHUSDT"}),
+                    return_exceptions=True,
+                )
+                if not isinstance(btc_r, Exception):
+                    b = btc_r.json()
+                    result["btc_usd"] = {"value": float(b["lastPrice"]), "change_pct": float(b["priceChangePercent"]), "source": "Binance"}
+                if not isinstance(eth_r, Exception):
+                    e2 = eth_r.json()
+                    result["eth_usd"] = {"value": float(e2["lastPrice"]), "change_pct": float(e2["priceChangePercent"]), "source": "Binance"}
+            except Exception as e:
+                logger.warning("Binance crypto failed: %s", e)
+            # Gold spot via Yahoo Finance GC=F (no key)
             try:
                 r = await hx.get(
-                    "https://api.coingecko.com/api/v3/simple/price",
-                    params={"ids": "bitcoin,ethereum,pax-gold", "vs_currencies": "usd", "include_24hr_change": "true"},
+                    "https://query1.finance.yahoo.com/v8/finance/chart/GC%3DF",
+                    params={"interval": "1d", "range": "5d"},
+                    headers={"User-Agent": "Mozilla/5.0"},
                 )
                 d = r.json()
-                if d.get("bitcoin"):
-                    result["btc_usd"] = {"value": d["bitcoin"]["usd"], "change_pct": d["bitcoin"].get("usd_24h_change", 0)}
-                if d.get("ethereum"):
-                    result["eth_usd"] = {"value": d["ethereum"]["usd"], "change_pct": d["ethereum"].get("usd_24h_change", 0)}
-                if d.get("pax-gold"):
-                    result["gold_usd_oz"] = {"value": d["pax-gold"]["usd"], "change_pct": d["pax-gold"].get("usd_24h_change", 0), "source": "PAX Gold (CoinGecko)"}
+                meta = d["chart"]["result"][0]["meta"]
+                gold_price = meta.get("regularMarketPrice") or meta.get("previousClose")
+                gold_prev = meta.get("previousClose") or gold_price
+                gold_chg = ((gold_price - gold_prev) / gold_prev * 100) if gold_prev else 0
+                result["gold_usd_oz"] = {"value": gold_price, "change_pct": round(gold_chg, 2), "source": "Yahoo Finance GC=F"}
             except Exception as e:
-                logger.warning("CoinGecko failed: %s", e)
+                logger.warning("Gold fetch failed: %s", e)
     except Exception as e:
         logger.warning("market overview general failure: %s", e)
     if not result["usd_idr"]:
