@@ -281,7 +281,7 @@ async def market_overview():
         "usd_idr": None,
         "ihsg": {"value": 7382.5, "change_pct": 0.42, "source": "Curated"},
         "gold_usd_oz": None,
-        "gold_idr_gram": {"value": 1612000, "change_pct": 0.31, "source": "Antam estimate"},
+        "gold_idr_gram": None,
         "btc_usd": None,
         "eth_usd": None,
         "updated_at": now_iso(),
@@ -324,7 +324,17 @@ async def market_overview():
     if not result["usd_idr"]:
         result["usd_idr"] = {"value": 15850, "source": "Cached estimate"}
     if not result["gold_usd_oz"]:
-        result["gold_usd_oz"] = {"value": 2680, "change_pct": 0.0, "source": "Curated"}
+        result["gold_usd_oz"] = {"value": 3300, "change_pct": 0.0, "source": "Curated"}
+    # Derive IDR/gram from gold USD/oz + USD/IDR rate (1 troy oz = 31.1035 gram)
+    if result["gold_usd_oz"] and result["usd_idr"]:
+        idr_per_gram = result["gold_usd_oz"]["value"] * result["usd_idr"]["value"] / 31.1035
+        result["gold_idr_gram"] = {
+            "value": round(idr_per_gram / 1000) * 1000,
+            "change_pct": result["gold_usd_oz"].get("change_pct", 0),
+            "source": "Derived (PAX Gold x USD/IDR)",
+        }
+    if not result["gold_idr_gram"]:
+        result["gold_idr_gram"] = {"value": 2668000, "change_pct": 0.0, "source": "Cached estimate"}
     if not result["btc_usd"]:
         # Fallback if CoinGecko rate-limits (last known good)
         prev = getattr(market_overview, "_last_crypto", None)
