@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { GraduationCap, Briefcase, ChartLineUp, Globe, NotePencil, Gear, House, BookmarkSimple, Sun, Moon } from "@phosphor-icons/react";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
+import LifeGoalAssistant from "@/components/LifeGoalAssistant";
 
 const items = [
   { to: "/app", icon: House, key: "home", testId: "nav-home" },
@@ -141,6 +142,9 @@ export default function Layout({ children }) {
           ))}
         </div>
       </nav>
+
+      {/* Life Goal Assistant — global floating chatbot */}
+      <LifeGoalAssistant />
     </div>
   );
 }

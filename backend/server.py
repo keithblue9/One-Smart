@@ -627,30 +627,68 @@ async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
         raise HTTPException(500, "AI not configured")
 
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
-    ctx_str = json.dumps(req.context, ensure_ascii=False) if req.context else "(tidak ada konteks tambahan)"
+    ctx_str = json.dumps(req.context, ensure_ascii=False) if req.context else ""
     system_msg = (
         f"Anda adalah penasihat finansial & karier pribadi di aplikasi 'One Smart' untuk pengguna millennial Indonesia. "
         f"Anda membantu topik: membangun portofolio investasi, strategi saham (IDX & global), perencanaan keuangan, "
         f"karier, beasiswa, dan keputusan hidup finansial. "
         f"Gaya: hangat, to-the-point, actionable, pakai contoh angka konkret bila relevan. "
         f"Selalu sertakan disclaimer singkat untuk saran investasi (bukan ajakan jual/beli). "
-        f"Konteks pasar saat ini: {ctx_str}. "
-        f"Jawab dalam {lang_label}. Gunakan markdown untuk struktur."
+        + (f"Konteks pasar saat ini: {ctx_str}. " if ctx_str else "")
+        + f"Jawab dalam {lang_label}. Gunakan markdown untuk struktur."
     )
     msgs = [{"role": m.role, "content": m.content} for m in req.messages]
     try:
         response = await anthropic_client.messages.create(
-            model=AI_MODEL,
-            max_tokens=1500,
-            system=system_msg,
-            messages=msgs,
+            model=AI_MODEL, max_tokens=1500, system=system_msg, messages=msgs,
         )
         reply = response.content[0].text
     except Exception as e:
         logger.exception("AI chat failed")
         raise HTTPException(500, f"AI error: {e}")
     return {"reply": reply}
-@api.get("/notes")
+
+
+@api.post("/ai/life-goal-chat")
+async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
+    """Life Goal Assistant — holistic life coach for Indonesian millennials."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(500, "AI not configured")
+
+    lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
+    system_msg = (
+        f"Kamu adalah 'Life Goal Assistant' — asisten kehidupan pribadi untuk millennial Indonesia di aplikasi One Smart. "
+        f"Kamu adalah perpaduan life coach, mentor karier, penasihat finansial, dan teman diskusi yang cerdas. "
+        f"Kamu membantu pengguna memikirkan dan merencanakan berbagai aspek kehidupan:\n"
+        f"- 🎯 Goal setting & life planning (5-10 tahun ke depan)\n"
+        f"- 💼 Karier: pilihan karier, skill yang perlu dibangun, transisi karier, freelance vs full-time\n"
+        f"- 💰 Finansial: menabung, investasi, hutang, perencanaan pensiun, FIRE (Financial Independence)\n"
+        f"- 🎓 Pendidikan: S2 vs langsung kerja, beasiswa, upskilling, online courses\n"
+        f"- 🌍 Relokasi: pertimbangan pindah kota/negara, work abroad, digital nomad\n"
+        f"- 🧠 Mindset & produktivitas: kebiasaan sukses, work-life balance, mengelola stres\n"
+        f"- 💡 Ide bisnis & side hustle: validasi ide, langkah pertama, modal awal\n\n"
+        f"Gaya komunikasi:\n"
+        f"- Hangat, jujur, dan tidak menghakimi\n"
+        f"- Berikan perspektif yang beragam, bukan hanya satu jawaban\n"
+        f"- Pakai angka & contoh konkret (misal: 'dengan gaji Rp 10 juta, idealnya sisihkan Rp 2 juta/bulan')\n"
+        f"- Ajukan pertanyaan clarifying jika konteks kurang — seperti teman yang benar-benar peduli\n"
+        f"- Disclaimer finansial singkat hanya saat relevan (bukan di setiap pesan)\n"
+        f"- Jawab dalam {lang_label}. Gunakan markdown (bullet, bold) untuk struktur yang mudah dibaca.\n\n"
+        f"Ingat: kamu bukan robot yang memberikan template jawaban. Kamu adalah teman cerdas yang benar-benar "
+        f"mendengarkan dan membantu pengguna menemukan jawaban terbaik untuk situasi MEREKA."
+    )
+    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+    try:
+        response = await anthropic_client.messages.create(
+            model=AI_MODEL, max_tokens=2000, system=system_msg, messages=msgs,
+        )
+        reply = response.content[0].text
+    except Exception as e:
+        logger.exception("Life goal chat failed")
+        raise HTTPException(500, f"AI error: {e}")
+    return {"reply": reply}
+
+
 async def list_notes(user: dict = Depends(get_user)):
     cursor = db.notes.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
     return {"items": await cursor.to_list(500)}

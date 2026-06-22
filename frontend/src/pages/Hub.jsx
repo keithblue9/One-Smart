@@ -76,36 +76,39 @@ const ALLOC = [
 const OWID_CHARTS = [
   {
     title: "Pangsa EV dari Penjualan Mobil Baru Global",
-    unit: "%",
-    color: "#10b981",
+    unit: "%", color: "#10b981",
+    source: "ourworldindata.org/electric-car-sales",
+    current: "22% (2024)",
     data: [
       { year: "2018", val: 2.2 }, { year: "2019", val: 2.5 }, { year: "2020", val: 4.2 },
       { year: "2021", val: 8.3 }, { year: "2022", val: 14 }, { year: "2023", val: 18 },
       { year: "2024", val: 22 }, { year: "2029*", val: 45 },
     ],
-    insight: "China memimpin 60% pasar EV global. Indonesia baru ~1% tapi tumbuh cepat karena insentif nikel.",
+    insight: "China memimpin 60% pasar EV global. Indonesia baru ~1% tapi tumbuh cepat karena insentif nikel. Cadangan nikel RI terbesar dunia (24% global) menjadi kunci rantai pasok baterai EV Asia.",
   },
   {
     title: "Energi Terbarukan: % Listrik Global",
-    unit: "%",
-    color: "#f59e0b",
+    unit: "%", color: "#f59e0b",
+    source: "ourworldindata.org/renewable-energy",
+    current: "33% (2024)",
     data: [
       { year: "2015", val: 22 }, { year: "2017", val: 25 }, { year: "2019", val: 27 },
       { year: "2021", val: 29 }, { year: "2023", val: 30 }, { year: "2024", val: 33 },
       { year: "2029*", val: 45 },
     ],
-    insight: "Solar turun 90% harga sejak 2010. IEA proyeksi 45% pada 2030. Indonesia target 23% EBT 2025.",
+    insight: "Solar photovoltaic turun harga 90% dalam 15 tahun. IEA proyeksi 45% pada 2030. Indonesia target 23% EBT 2025 namun baru ~13% — gap ini menciptakan peluang besar di sektor energi hijau.",
   },
   {
     title: "Pengguna Internet Global (miliar)",
-    unit: "M",
-    color: "#60a5fa",
+    unit: "Miliar", color: "#60a5fa",
+    source: "ourworldindata.org/internet",
+    current: "5.5 miliar (2024)",
     data: [
       { year: "2015", val: 3.2 }, { year: "2017", val: 3.9 }, { year: "2019", val: 4.1 },
       { year: "2021", val: 4.9 }, { year: "2023", val: 5.4 }, { year: "2024", val: 5.5 },
       { year: "2029*", val: 6.5 },
     ],
-    insight: "1 miliar lebih di-unconnect, mayoritas di Afrika & Asia Selatan. Starlink mempercepat gap closing.",
+    insight: "~2.5 miliar manusia masih unconnected, mayoritas di Afrika & Asia Selatan. Starlink LEO satellite mempercepat konektivitas. Indonesia masih ~20 juta warga tanpa broadband terutama di Papua & Maluku.",
   },
 ];
 
@@ -288,7 +291,7 @@ function OwidSection({ lang }) {
               </div>
               <a href={`https://${selected.source}`} target="_blank" rel="noopener noreferrer"
                 className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline font-medium">
-                <ArrowSquareOut size={13}/> Baca data lengkap di {selected.source}
+                <ArrowSquareOut size={13}/> Baca data lengkap di ourworldindata.org
               </a>
             </div>
           </div>
