@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { SunHorizon, Sparkle, X, ArrowClockwise, Coffee } from "@phosphor-icons/react";
+import { SunHorizon, Sparkle, X, ArrowClockwise, Spinner } from "@phosphor-icons/react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -138,7 +138,7 @@ export default function SmartMorningBrief({ market }) {
           <div className="p-6">
             {loading && (
               <div className="flex flex-col items-center gap-3 py-8 text-center">
-                <Coffee size={32} weight="duotone" className="text-[#B76E38] animate-bounce" />
+                <Spinner size={32} weight="duotone" className="text-[#B76E38] animate-spin" />
                 <p className="text-sm text-ink-muted">
                   {lang === "id" ? "Menyeduh briefing hari ini..." : "Brewing your daily brief..."}
                 </p>
