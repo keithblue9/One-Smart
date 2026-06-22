@@ -69,8 +69,9 @@ export default function SmartMorningBrief({ market }) {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     if (open && !brief && !loading) fetchBrief();
-  }, [open]);
+  }, [open]); // intentionally omit brief/loading/fetchBrief to run only on open change
 
   const handleOpen = () => {
     setBrief(null);
