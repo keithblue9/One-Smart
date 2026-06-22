@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import AIInsightButton from "@/components/AIInsightButton";
+import ChatBox from "@/components/ChatBox";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 const recTone = {
@@ -15,7 +16,10 @@ const recTone = {
 
 function StockRow({ s, currency, lang, locale }) {
   const up = s.change_pct >= 0;
-  const price = currency === "IDR" ? `Rp ${s.price_idr.toLocaleString()}` : `$${s.price_usd}`;
+  const priceVal = currency === "IDR" ? s.price_idr : s.price_usd;
+  const price = currency === "IDR"
+    ? `Rp ${(priceVal ?? 0).toLocaleString("id-ID")}`
+    : `$${(priceVal ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
   return (
     <div className="border-b border-[#E8E6E1] last:border-0 py-3" data-testid={`stock-${s.ticker}`}>
       <div className="flex items-center justify-between gap-3">
@@ -23,6 +27,11 @@ function StockRow({ s, currency, lang, locale }) {
           <div className="flex items-center gap-2">
             <span className="font-heading text-base text-ink">{s.ticker}</span>
             <span className="text-[11px] px-2 py-0.5 rounded-full text-ink-muted bg-stone">{s.sector}</span>
+            {s.live && (
+              <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />LIVE
+              </span>
+            )}
           </div>
           <div className="text-xs text-ink-muted truncate">{s.name}</div>
         </div>
@@ -161,6 +170,11 @@ export default function Investment() {
           ? "Disclaimer: Konten edukasi, bukan saran investasi personal. DYOR."
           : "Disclaimer: Educational content, not personal financial advice. DYOR."}
       </p>
+
+      <ChatBox
+        context={{ market, stocks_id: stocksId, stocks_global: stocksGl }}
+        contextLabel={lang === "id" ? "Diskusi investasi & portofolio" : "Investment & portfolio chat"}
+      />
     </div>
   );
 }

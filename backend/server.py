@@ -133,6 +133,17 @@ class AIInsightReq(BaseModel):
     language: str = "id"
 
 
+class ChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class AIChatReq(BaseModel):
+    messages: List[ChatMessage]
+    context: dict = {}
+    language: str = "id"
+
+
 class NoteCreate(BaseModel):
     title: str
     content: str = ""
@@ -253,14 +264,57 @@ async def job_portfolio_tips():
 
 
 # ============== INVESTMENT ==============
+async def _enrich_with_live_prices(stocks, suffix, price_key):
+    """Fetch live prices from Yahoo Finance for a list of stocks. suffix='.JK' for IDX, '' for global."""
+    async def fetch_one(s, hx):
+        try:
+            sym = s["ticker"].replace(".", "-") + suffix
+            r = await hx.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
+                params={"interval": "1d", "range": "2d"},
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            d = r.json()
+            meta = d["chart"]["result"][0]["meta"]
+            price = meta.get("regularMarketPrice")
+            prev = meta.get("previousClose") or meta.get("chartPreviousClose")
+            if price:
+                s = {**s, price_key: round(price, 2)}
+                if prev:
+                    s["change_pct"] = round((price - prev) / prev * 100, 2)
+                s["live"] = True
+        except Exception:
+            s = {**s, "live": False}
+        return s
+
+    import asyncio as _a
+    async with httpx.AsyncClient(timeout=10.0) as hx:
+        results = await _a.gather(*[fetch_one(s, hx) for s in stocks])
+    return list(results)
+
+
 @api.get("/investment/stocks-id")
 async def stocks_id():
-    return {"items": STOCKS_ID}
+    cache = getattr(stocks_id, "_cache", None)
+    now = datetime.now(timezone.utc)
+    if cache and (now - cache["t"]).total_seconds() < 120:
+        return cache["data"]
+    items = await _enrich_with_live_prices(STOCKS_ID, ".JK", "price_idr")
+    data = {"items": items, "updated_at": now_iso()}
+    stocks_id._cache = {"t": now, "data": data}
+    return data
 
 
 @api.get("/investment/stocks-global")
 async def stocks_global():
-    return {"items": STOCKS_GLOBAL}
+    cache = getattr(stocks_global, "_cache", None)
+    now = datetime.now(timezone.utc)
+    if cache and (now - cache["t"]).total_seconds() < 120:
+        return cache["data"]
+    items = await _enrich_with_live_prices(STOCKS_GLOBAL, "", "price_usd")
+    data = {"items": items, "updated_at": now_iso()}
+    stocks_global._cache = {"t": now, "data": data}
+    return data
 
 
 @api.get("/investment/alternatives")
@@ -480,7 +534,36 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     return {"insight": insight_text, "cached": False}
 
 
-# ============== NOTES & REMINDERS ==============
+@api.post("/ai/chat")
+async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
+    """Interactive financial/career advisor chat. Maintains conversation context."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(500, "AI not configured")
+
+    lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
+    ctx_str = json.dumps(req.context, ensure_ascii=False) if req.context else "(tidak ada konteks tambahan)"
+    system_msg = (
+        f"Anda adalah penasihat finansial & karier pribadi di aplikasi 'One Smart' untuk pengguna millennial Indonesia. "
+        f"Anda membantu topik: membangun portofolio investasi, strategi saham (IDX & global), perencanaan keuangan, "
+        f"karier, beasiswa, dan keputusan hidup finansial. "
+        f"Gaya: hangat, to-the-point, actionable, pakai contoh angka konkret bila relevan. "
+        f"Selalu sertakan disclaimer singkat untuk saran investasi (bukan ajakan jual/beli). "
+        f"Konteks pasar saat ini: {ctx_str}. "
+        f"Jawab dalam {lang_label}. Gunakan markdown untuk struktur."
+    )
+    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+    try:
+        response = await anthropic_client.messages.create(
+            model=AI_MODEL,
+            max_tokens=1500,
+            system=system_msg,
+            messages=msgs,
+        )
+        reply = response.content[0].text
+    except Exception as e:
+        logger.exception("AI chat failed")
+        raise HTTPException(500, f"AI error: {e}")
+    return {"reply": reply}
 @api.get("/notes")
 async def list_notes(user: dict = Depends(get_user)):
     cursor = db.notes.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
@@ -841,6 +924,20 @@ async def shutdown():
 @api.get("/")
 async def root():
     return {"app": "One Smart", "status": "ok"}
+
+
+@api.get("/debug/ai")
+async def debug_ai():
+    info = {"key_set": bool(ANTHROPIC_API_KEY), "key_prefix": ANTHROPIC_API_KEY[:12] + "..." if ANTHROPIC_API_KEY else None, "model": AI_MODEL}
+    if anthropic_client:
+        try:
+            r = await anthropic_client.messages.create(model=AI_MODEL, max_tokens=50, messages=[{"role": "user", "content": "Say OK"}])
+            info["test_call"] = "success"
+            info["response"] = r.content[0].text
+        except Exception as e:
+            info["test_call"] = "failed"
+            info["error"] = str(e)
+    return info
 
 
 @api.get("/debug/passcode")
