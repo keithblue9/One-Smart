@@ -92,18 +92,22 @@ async def get_user(authorization: Optional[str] = Header(None)) -> dict:
 
 
 async def ensure_default_user():
-    """Seed singleton default user if missing."""
+    """Seed singleton default user if missing, and sync passcode hash with current env."""
     existing = await db.users.find_one({"id": "default"})
+    current_hash = hash_passcode(DEFAULT_PASSCODE)
     if not existing:
         await db.users.insert_one({
             "id": "default",
             "name": "One Smart",
             "dob": None,
-            "passcode_hash": hash_passcode(DEFAULT_PASSCODE),
+            "passcode_hash": current_hash,
             "language": "id",
             "created_at": now_iso(),
         })
         logger.info("Seeded default user with passcode %s", DEFAULT_PASSCODE)
+    elif existing.get("passcode_hash") != current_hash:
+        await db.users.update_one({"id": "default"}, {"$set": {"passcode_hash": current_hash}})
+        logger.info("Updated default user passcode hash (env changed)")
 
 
 # ============== MODELS ==============
