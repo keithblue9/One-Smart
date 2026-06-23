@@ -371,7 +371,17 @@ async def market_overview():
                 r = await hx.get("https://api.frankfurter.dev/v1/latest", params={"base": "USD", "symbols": "IDR"})
                 d = r.json()
                 if d.get("rates", {}).get("IDR"):
-                    result["usd_idr"] = {"value": d["rates"]["IDR"], "source": "frankfurter.dev"}
+                    usd_val = d["rates"]["IDR"]
+                    # Get yesterday's rate for prev_value
+                    try:
+                        from datetime import date, timedelta
+                        yesterday = (date.today() - timedelta(days=1)).isoformat()
+                        r2 = await hx.get(f"https://api.frankfurter.dev/v1/{yesterday}", params={"base": "USD", "symbols": "IDR"})
+                        d2 = r2.json()
+                        prev_usd = d2.get("rates", {}).get("IDR")
+                    except Exception:
+                        prev_usd = None
+                    result["usd_idr"] = {"value": usd_val, "prev_value": round(prev_usd, 0) if prev_usd else None, "source": "frankfurter.dev"}
             except Exception as e:
                 logger.warning("Frankfurter failed: %s", e)
             if not result["usd_idr"]:
@@ -421,8 +431,12 @@ async def market_overview():
     # Derive IDR/gram from gold USD/oz + USD/IDR rate (1 troy oz = 31.1035 gram)
     if result["gold_usd_oz"] and result["usd_idr"]:
         idr_per_gram = result["gold_usd_oz"]["value"] * result["usd_idr"]["value"] / 31.1035
+        prev_gold = result["gold_usd_oz"].get("prev_value")
+        prev_usd = result["usd_idr"].get("prev_value") or result["usd_idr"]["value"]
+        prev_idr_gram = (prev_gold * prev_usd / 31.1035) if prev_gold else None
         result["gold_idr_gram"] = {
             "value": round(idr_per_gram / 1000) * 1000,
+            "prev_value": round(prev_idr_gram / 1000) * 1000 if prev_idr_gram else None,
             "change_pct": result["gold_usd_oz"].get("change_pct", 0),
             "source": "Derived (PAX Gold x USD/IDR)",
         }

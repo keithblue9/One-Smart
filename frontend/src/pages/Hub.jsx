@@ -373,8 +373,8 @@ export default function Hub() {
         {market ? (
           <div className="flex gap-3 overflow-x-auto hide-scrollbar -mx-4 lg:mx-0 px-4 lg:px-0 pb-1">
             <MktCard label="IHSG" value={fmt(market.ihsg?.value)} delta={market.ihsg?.change_pct} sub="Jakarta Composite" prev={market.ihsg?.prev_value ? fmt(market.ihsg.prev_value) : null}/>
-            <MktCard label="USD/IDR" value={`Rp ${fmt(market.usd_idr?.value)}`} sub="Kurs tengah"/>
-            <MktCard label="Emas/gram" value={`Rp ${fmt(market.gold_idr_gram?.value)}`} delta={market.gold_idr_gram?.change_pct} sub="Harga spot"/>
+            <MktCard label="USD/IDR" value={`Rp ${fmt(market.usd_idr?.value)}`} sub="Kurs tengah" prev={market.usd_idr?.prev_value ? `Rp ${fmt(market.usd_idr.prev_value)}` : null}/>
+            <MktCard label="Emas/gram" value={`Rp ${fmt(market.gold_idr_gram?.value)}`} delta={market.gold_idr_gram?.change_pct} sub="Harga spot" prev={market.gold_idr_gram?.prev_value ? `Rp ${fmt(market.gold_idr_gram.prev_value)}` : null}/>
             <MktCard label="Bitcoin" value={`$${fmt(market.btc_usd?.value)}`} delta={market.btc_usd?.change_pct} sub="USD" prev={market.btc_usd?.prev_value ? `$${fmt(market.btc_usd.prev_value)}` : null}/>
             <MktCard label="Ethereum" value={`$${fmt(market.eth_usd?.value)}`} delta={market.eth_usd?.change_pct} sub="USD" prev={market.eth_usd?.prev_value ? `$${fmt(market.eth_usd.prev_value)}` : null}/>
           </div>
