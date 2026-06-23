@@ -312,11 +312,12 @@ export default function Investment() {
             })}
           </div>
         </TabsContent>
-      </Tabs>
 
-              <TabsContent value="simulator">
+        <TabsContent value="simulator">
           <InvestmentSimulator/>
         </TabsContent>
+      </Tabs>
+
       <p className="text-[11px] text-slate-400 mt-6 text-center">⚠️ Disclaimer: Konten edukasi, bukan saran investasi personal. DYOR (Do Your Own Research) sebelum mengambil keputusan.</p>
 
       <ChatBox context={{market,stocks_id:stocksId,stocks_global:stocksGl}} contextLabel={lang==="id"?"Diskusi investasi & portofolio":"Investment & portfolio chat"}/>
