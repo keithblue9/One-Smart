@@ -79,25 +79,23 @@ export default function LifeGoalAssistant() {
 
   return (
     <>
-      {/* Floating trigger */}
+      {/* Floating bubble FAB */}
       {!open && (
         <button
           onClick={() => setOpen(true)}
-          className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 pl-4 pr-5 py-3.5 rounded-full shadow-xl hover:shadow-2xl hover:scale-105 transition-all"
+          className="fixed bottom-6 right-5 z-50 h-14 w-14 rounded-full shadow-xl hover:shadow-2xl hover:scale-110 transition-all flex items-center justify-center"
           style={{background:"linear-gradient(135deg, #2c4a3b 0%, #1e3328 100%)"}}
+          title="Life Goal Assistant"
         >
-          <div className="relative">
-            <Star size={20} weight="fill" className="text-amber-300"/>
-            <span className="absolute -top-1 -right-1 h-2.5 w-2.5 bg-emerald-400 rounded-full border border-white animate-pulse"/>
-          </div>
-          <span className="text-white font-semibold text-sm">Life Goal Assistant</span>
+          <Star size={24} weight="fill" className="text-amber-300"/>
+          <span className="absolute -top-1 -right-1 h-3.5 w-3.5 bg-emerald-400 rounded-full border-2 border-white animate-pulse"/>
         </button>
       )}
 
       {/* Chat panel */}
       {open && (
-        <div className="fixed bottom-6 right-6 z-50 flex flex-col"
-          style={{width:"min(440px, calc(100vw - 3rem))", height:"min(640px, 85vh)"}}>
+        <div className="fixed bottom-24 right-4 z-50 flex flex-col sm:bottom-6 sm:right-6"
+          style={{width:"min(420px, calc(100vw - 2rem))", height:"min(600px, 80vh)"}}>
           <div className="flex flex-col h-full bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
 
             {/* Header */}
