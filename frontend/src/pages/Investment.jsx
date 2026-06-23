@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { t } from "@/lib/i18n";
 import AIInsightButton from "@/components/AIInsightButton";
 import ChatBox from "@/components/ChatBox";
+import InvestmentSimulator from "@/components/InvestmentSimulator";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 const recStyle = {
@@ -38,6 +39,7 @@ function StockCard({ s, currency, lang }) {
             <span className="font-bold text-slate-800 text-lg">{s.ticker}</span>
             <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">{s.sector}</span>
             {s.live && <span className="flex items-center gap-1 text-[10px] text-emerald-600 font-bold"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"/>LIVE</span>}
+            {s.dividend && <span className="flex items-center gap-1 text-[10px] text-violet-600 font-bold bg-violet-50 px-1.5 py-0.5 rounded-full">🔔 Dividen {s.dividend.yield_pct}%</span>}
           </div>
           <div className="text-xs text-slate-500 mt-0.5">{s.name}</div>
         </div>
@@ -62,6 +64,19 @@ function StockCard({ s, currency, lang }) {
 
       {expanded && (
         <div className="mt-3 p-3 bg-slate-50 rounded-xl text-xs text-slate-600 space-y-2 leading-relaxed">
+          {s.dividend && (
+            <div className="bg-violet-50 border border-violet-100 rounded-lg p-2 mb-2">
+              <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wider mb-1">🔔 Info Dividen</div>
+              <div className="grid grid-cols-2 gap-1 text-[11px] text-violet-800">
+                <span>Yield: <strong>{s.dividend.yield_pct}%</strong></span>
+                <span>Frekuensi: <strong>{s.dividend.freq}</strong></span>
+                {s.dividend.cum_date && <span>Cum Date: <strong>{s.dividend.cum_date}</strong></span>}
+                {s.dividend.ex_date && <span>Ex Date: <strong>{s.dividend.ex_date}</strong></span>}
+                {s.dividend.payment_date && <span>Bayar: <strong>{s.dividend.payment_date}</strong></span>}
+              </div>
+              {s.dividend.note && <p className="text-[10px] text-violet-600 mt-1">{s.dividend.note}</p>}
+            </div>
+          )}
           <div><strong className="text-slate-700">📊 Cara baca data ini:</strong> Harga live dari Yahoo Finance, diupdate setiap 2 menit. Rekomendasi (BUY/HOLD/SELL) berdasarkan analisa fundamental kualitatif + posisi dalam siklus bisnis.</div>
           <div><strong className="text-slate-700">⚠️ Disclaimer:</strong> Ini bukan saran investasi. Selalu lakukan riset mandiri (DYOR) dan pertimbangkan profil risiko kamu sebelum membeli saham apapun.</div>
           <div><strong className="text-slate-700">🤖 AI Insight:</strong> Klik tombol "AI Insight" di atas untuk mendapat analisa teknikal + fundamental + konteks makro yang komprehensif dari Claude AI.</div>
@@ -202,6 +217,7 @@ export default function Investment() {
           <TabsTrigger value="id" className="rounded-lg text-xs">🇮🇩 Saham Indonesia</TabsTrigger>
           <TabsTrigger value="global" className="rounded-lg text-xs">🌍 Saham Global</TabsTrigger>
           <TabsTrigger value="alt" className="rounded-lg text-xs">💰 Investasi Alternatif</TabsTrigger>
+          <TabsTrigger value="simulator" className="rounded-lg text-xs">🧮 Simulasi Investasi</TabsTrigger>
         </TabsList>
 
         <TabsContent value="id">
@@ -298,6 +314,9 @@ export default function Investment() {
         </TabsContent>
       </Tabs>
 
+              <TabsContent value="simulator">
+          <InvestmentSimulator/>
+        </TabsContent>
       <p className="text-[11px] text-slate-400 mt-6 text-center">⚠️ Disclaimer: Konten edukasi, bukan saran investasi personal. DYOR (Do Your Own Research) sebelum mengambil keputusan.</p>
 
       <ChatBox context={{market,stocks_id:stocksId,stocks_global:stocksGl}} contextLabel={lang==="id"?"Diskusi investasi & portofolio":"Investment & portfolio chat"}/>

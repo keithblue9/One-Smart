@@ -44,7 +44,7 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 DEFAULT_PASSCODE = os.environ.get("DEFAULT_PASSCODE", "991285")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-AI_MODEL = "claude-sonnet-4-5-20250929"
+AI_MODEL = "claude-haiku-4-5-20251001"
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY_PEM = os.environ.get("VAPID_PRIVATE_KEY_PEM", "").replace("\\n", "\n")
 VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "admin@onesmart.app")
@@ -141,6 +141,14 @@ class ChatMessage(BaseModel):
 class AIChatReq(BaseModel):
     messages: List[ChatMessage]
     context: dict = {}
+    language: str = "id"
+
+
+class SimulatorReq(BaseModel):
+    capital_idr: float           # e.g. 50_000_000
+    risk_profile: str = "moderate"  # conservative | moderate | aggressive
+    horizon_years: int = 5
+    goals: str = ""              # optional user goal text
     language: str = "id"
 
 
@@ -354,7 +362,7 @@ async def market_overview():
                 price = meta.get("regularMarketPrice") or meta.get("previousClose")
                 prev = meta.get("previousClose") or meta.get("chartPreviousClose")
                 change_pct = ((price - prev) / prev * 100) if prev and price else 0
-                result["ihsg"] = {"value": round(price, 2), "change_pct": round(change_pct, 2), "source": "Yahoo Finance"}
+                result["ihsg"] = {"value": round(price, 2), "prev_value": round(prev, 2) if prev else None, "change_pct": round(change_pct, 2), "source": "Yahoo Finance"}
             except Exception as e:
                 logger.warning("IHSG fetch failed: %s", e)
                 result["ihsg"] = {"value": 7382.5, "change_pct": 0.0, "source": "Cached estimate"}
@@ -383,10 +391,10 @@ async def market_overview():
                 )
                 if not isinstance(btc_r, Exception):
                     b = btc_r.json()
-                    result["btc_usd"] = {"value": float(b["lastPrice"]), "change_pct": float(b["priceChangePercent"]), "source": "Binance"}
+                    result["btc_usd"] = {"value": float(b["lastPrice"]), "prev_value": round(float(b["lastPrice"]) - float(b.get("priceChange",0)), 2), "change_pct": float(b["priceChangePercent"]), "source": "Binance"}
                 if not isinstance(eth_r, Exception):
                     e2 = eth_r.json()
-                    result["eth_usd"] = {"value": float(e2["lastPrice"]), "change_pct": float(e2["priceChangePercent"]), "source": "Binance"}
+                    result["eth_usd"] = {"value": float(e2["lastPrice"]), "prev_value": round(float(e2["lastPrice"]) - float(e2.get("priceChange",0)), 2), "change_pct": float(e2["priceChangePercent"]), "source": "Binance"}
             except Exception as e:
                 logger.warning("Binance crypto failed: %s", e)
             # Gold spot via Yahoo Finance GC=F (no key)
@@ -401,7 +409,7 @@ async def market_overview():
                 gold_price = meta.get("regularMarketPrice") or meta.get("previousClose")
                 gold_prev = meta.get("previousClose") or gold_price
                 gold_chg = ((gold_price - gold_prev) / gold_prev * 100) if gold_prev else 0
-                result["gold_usd_oz"] = {"value": gold_price, "change_pct": round(gold_chg, 2), "source": "Yahoo Finance GC=F"}
+                result["gold_usd_oz"] = {"value": gold_price, "prev_value": round(gold_prev, 2) if gold_prev else None, "change_pct": round(gold_chg, 2), "source": "Yahoo Finance GC=F"}
             except Exception as e:
                 logger.warning("Gold fetch failed: %s", e)
     except Exception as e:
@@ -689,6 +697,56 @@ async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
     return {"reply": reply}
 
 
+@api.post("/ai/investment-simulator")
+async def investment_simulator(req: SimulatorReq, user: dict = Depends(get_user)):
+    """AI-powered investment simulator: given capital, risk profile & horizon → optimal allocation + projections."""
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(500, "AI not configured")
+
+    lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
+    cap_fmt = f"Rp {req.capital_idr:,.0f}"
+    goals_txt = f"Tujuan investasi user: {req.goals}" if req.goals else ""
+
+    prompt = (
+        f"Anda adalah perencana keuangan bersertifikat (CFP) untuk pasar Indonesia.\n\n"
+        f"**Data Input:**\n"
+        f"- Modal investasi: {cap_fmt}\n"
+        f"- Profil risiko: {req.risk_profile}\n"
+        f"- Horizon investasi: {req.horizon_years} tahun\n"
+        f"{goals_txt}\n\n"
+        f"Berikan analisa investasi KOMPREHENSIF dalam format JSON murni (no markdown fences), struktur:\n"
+        f'{{\n'
+        f'  "summary": "1 paragraf ringkasan strategi utama",\n'
+        f'  "allocation": [{{"name":"...","pct":..,"amount_idr":..,"instrument":"...","rationale":"..."}}],\n'
+        f'  "projections": [{{"year":1,"conservative":..,"moderate":..,"optimistic":..}},...(hingga {req.horizon_years} tahun)],\n'
+        f'  "monthly_dca": {{"amount":..,"schedule":"..","note":".."}},\n'
+        f'  "key_actions": ["langkah 1","langkah 2","langkah 3"],\n'
+        f'  "risks": ["risiko 1","risiko 2"],\n'
+        f'  "disclaimer": "disclaimer singkat"\n'
+        f'}}\n\n'
+        f"Proyeksi dalam Rupiah absolut. Allocation amount_idr harus berjumlah tepat {req.capital_idr:.0f}.\n"
+        f"Gunakan instrumen pasar Indonesia yang realistis (Reksa Dana, Saham IDX, SBN, Emas, Deposito).\n"
+        f"Output ONLY valid JSON. Bahasa: {lang_label}."
+    )
+    try:
+        response = await anthropic_client.messages.create(
+            model=AI_MODEL, max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"): text = text[4:]
+        result = json.loads(text.strip())
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"AI returned invalid JSON: {e}")
+    except Exception as e:
+        logger.exception("Simulator failed")
+        raise HTTPException(500, f"AI error: {e}")
+    return result
+
+
+@api.get("/notes")
 async def list_notes(user: dict = Depends(get_user)):
     cursor = db.notes.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1)
     return {"items": await cursor.to_list(500)}

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   GraduationCap, Briefcase, ChartLineUp, Globe, NotePencil,
-  BookmarkSimple, ArrowRight, TrendUp, TrendDown, Sparkle, X, ArrowSquareOut,
+  BookmarkSimple, ArrowRight, TrendUp, TrendDown, Sparkle, X, ArrowSquareOut, ArrowsClockwise,
 } from "@phosphor-icons/react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -31,7 +31,7 @@ function fmt(n, dec = 0) {
 }
 
 // ── Market Card ──────────────────────────────────────────────────────────────
-function MktCard({ label, value, delta, sub }) {
+function MktCard({ label, value, delta, sub, prev }) {
   const up = (delta ?? 0) >= 0;
   const clr = delta == null ? "#94a3b8" : up ? "#10b981" : "#ef4444";
   const sparkData = [50-8,50-3,50+2,50-1,50+5, up ? 59 : 41].map(v => ({ v }));
@@ -39,7 +39,8 @@ function MktCard({ label, value, delta, sub }) {
     <div className="bg-white rounded-2xl border border-slate-100 p-4 min-w-[155px] flex-shrink-0 shadow-sm hover:shadow-md transition-all hover:-translate-y-0.5">
       <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400 mb-1">{label}</div>
       <div className="font-bold text-xl text-slate-800 leading-tight">{value}</div>
-      {sub && <div className="text-[10px] text-slate-400 mt-0.5">{sub}</div>}
+      {prev && <div className="text-[10px] text-slate-500 mt-0.5">Prev: {prev}</div>}
+      {!prev && sub && <div className="text-[10px] text-slate-400 mt-0.5">{sub}</div>}
       {delta !== undefined && (
         <div className="flex items-center gap-0.5 text-xs font-bold mt-1" style={{ color: clr }}>
           {delta != null ? (up ? <TrendUp size={11} weight="bold" /> : <TrendDown size={11} weight="bold" />) : null}
@@ -180,8 +181,36 @@ const tiles = [
 ];
 
 // ── OWID Section with clickable detail modal ──────────────────────────────────
-function OwidSection({ lang }) {
+const ALL_OWID = [
+  { title:"Pangsa EV dari Penjualan Mobil Baru Global", unit:"%", color:"#10b981", source:"ourworldindata.org/electric-car-sales", current:"22% (2024)",
+    data:[{year:"2018",val:2.2},{year:"2019",val:2.5},{year:"2020",val:4.2},{year:"2021",val:8.3},{year:"2022",val:14},{year:"2023",val:18},{year:"2024",val:22},{year:"2029*",val:45}],
+    insight:"China memimpin 60% pasar EV global. Indonesia baru ~1% tapi tumbuh cepat karena insentif nikel. Cadangan nikel RI terbesar dunia (24% global) menjadi kunci rantai pasok baterai EV Asia." },
+  { title:"Energi Terbarukan: % Listrik Global", unit:"%", color:"#f59e0b", source:"ourworldindata.org/renewable-energy", current:"33% (2024)",
+    data:[{year:"2015",val:22},{year:"2017",val:25},{year:"2019",val:27},{year:"2021",val:29},{year:"2023",val:30},{year:"2024",val:33},{year:"2029*",val:45}],
+    insight:"Solar photovoltaic turun harga 90% dalam 15 tahun. IEA proyeksi 45% pada 2030. Indonesia target 23% EBT 2025 namun baru ~13% — gap ini menciptakan peluang besar di sektor energi hijau." },
+  { title:"Pengguna Internet Global (miliar)", unit:" M", color:"#60a5fa", source:"ourworldindata.org/internet", current:"5.5 miliar (2024)",
+    data:[{year:"2015",val:3.2},{year:"2017",val:3.9},{year:"2019",val:4.1},{year:"2021",val:4.9},{year:"2023",val:5.4},{year:"2024",val:5.5},{year:"2029*",val:6.5}],
+    insight:"~2.5 miliar manusia masih unconnected. Starlink LEO satellite mempercepat konektivitas. Indonesia ~20 juta warga tanpa broadband terutama di Papua & Maluku." },
+  { title:"Emisi CO₂ Global (Gt per tahun)", unit:" Gt", color:"#94a3b8", source:"ourworldindata.org/co2-emissions", current:"37.4 Gt (2024)",
+    data:[{year:"2000",val:25},{year:"2005",val:30},{year:"2010",val:33},{year:"2015",val:36},{year:"2020",val:34},{year:"2024",val:37},{year:"2030*",val:32}],
+    insight:"IPCC mensyaratkan turun 43% dari level 2019 untuk batasi 1.5°C. Harga karbon EU €60–70/ton. Indonesia emitter ke-8 dunia punya tanggung jawab & peluang di pasar karbon ASEAN." },
+  { title:"Angka Harapan Hidup Global (tahun)", unit:" thn", color:"#f472b6", source:"ourworldindata.org/life-expectancy", current:"73.4 tahun (2024)",
+    data:[{year:"1990",val:64},{year:"2000",val:67},{year:"2010",val:70},{year:"2020",val:72},{year:"2024",val:73.4},{year:"2029*",val:74.8}],
+    insight:"Naik 9 tahun sejak 1990 karena penurunan kematian bayi. Indonesia: 72 thn. Penyebab kematian bergeser ke penyakit tidak menular — peluang besar di healthtech & asuransi." },
+  { title:"AI Compute: FLOPs Model Frontier", unit:"×", color:"#a78bfa", source:"ourworldindata.org/artificial-intelligence", current:"10²⁵ FLOPs (2024)",
+    data:[{year:"2018",val:10},{year:"2020",val:40},{year:"2022",val:100},{year:"2024",val:400},{year:"2026",val:1200}],
+    insight:"Compute naik ~4× per tahun. GPT-4 butuh ~10²⁴ FLOPs. Implikasi: kebutuhan energi data center meledak, nikel RI untuk baterai AI server makin krusial." },
+];
+
+function OwidSection({ lang, refreshKey }) {
   const [selected, setSelected] = useState(null);
+  // Rotate which 3 charts to show based on refreshKey
+  const startIdx = (refreshKey * 3) % ALL_OWID.length;
+  const charts = [
+    ALL_OWID[startIdx % ALL_OWID.length],
+    ALL_OWID[(startIdx + 1) % ALL_OWID.length],
+    ALL_OWID[(startIdx + 2) % ALL_OWID.length],
+  ];
 
   return (
     <>
@@ -305,6 +334,7 @@ function OwidSection({ lang }) {
 export default function Hub() {
   const { user, lang } = useAuth();
   const [market, setMarket] = useState(null);
+  const [owidKey, setOwidKey] = useState(0);
 
   useEffect(() => {
     api.get("/investment/market-overview").then(r => setMarket(r.data)).catch(() => {});
@@ -342,11 +372,11 @@ export default function Hub() {
         <SH icon={ChartLineUp} label={lang==="id"?"Pasar Hari Ini":"Today's Market"} sub={lang==="id"?"Live dari Yahoo Finance & Binance":"Live from Yahoo Finance & Binance"}/>
         {market ? (
           <div className="flex gap-3 overflow-x-auto hide-scrollbar -mx-4 lg:mx-0 px-4 lg:px-0 pb-1">
-            <MktCard label="IHSG" value={fmt(market.ihsg?.value)} delta={market.ihsg?.change_pct} sub="Jakarta Composite"/>
+            <MktCard label="IHSG" value={fmt(market.ihsg?.value)} delta={market.ihsg?.change_pct} sub="Jakarta Composite" prev={market.ihsg?.prev_value ? fmt(market.ihsg.prev_value) : null}/>
             <MktCard label="USD/IDR" value={`Rp ${fmt(market.usd_idr?.value)}`} sub="Kurs tengah"/>
             <MktCard label="Emas/gram" value={`Rp ${fmt(market.gold_idr_gram?.value)}`} delta={market.gold_idr_gram?.change_pct} sub="Harga spot"/>
-            <MktCard label="Bitcoin" value={`$${fmt(market.btc_usd?.value)}`} delta={market.btc_usd?.change_pct} sub="USD"/>
-            <MktCard label="Ethereum" value={`$${fmt(market.eth_usd?.value)}`} delta={market.eth_usd?.change_pct} sub="USD"/>
+            <MktCard label="Bitcoin" value={`$${fmt(market.btc_usd?.value)}`} delta={market.btc_usd?.change_pct} sub="USD" prev={market.btc_usd?.prev_value ? `$${fmt(market.btc_usd.prev_value)}` : null}/>
+            <MktCard label="Ethereum" value={`$${fmt(market.eth_usd?.value)}`} delta={market.eth_usd?.change_pct} sub="USD" prev={market.eth_usd?.prev_value ? `$${fmt(market.eth_usd.prev_value)}` : null}/>
           </div>
         ) : (
           <div className="flex gap-3">{[1,2,3,4,5].map(i=><div key={i} className="h-32 w-40 rounded-2xl bg-slate-100 animate-pulse flex-shrink-0"/>)}</div>
@@ -393,8 +423,13 @@ export default function Hub() {
 
       {/* ── INFOGRAFIS: OWID DUNIA ── */}
       <section>
-        <SH icon={Globe} label={lang==="id"?"Tren Global — Our World in Data":"Global Trends — Our World in Data"} sub={lang==="id"?"Klik kartu untuk baca detail & konteks Indonesia":"Click a card to read details & Indonesia context"}/>
-        <OwidSection lang={lang}/>
+        <div className="flex items-center justify-between mb-4">
+          <SH icon={Globe} label={lang==="id"?"Tren Global — Our World in Data":"Global Trends — Our World in Data"} sub={lang==="id"?"Klik kartu untuk baca detail & konteks Indonesia":"Click a card to read details & Indonesia context"}/>
+          <button onClick={()=>setOwidKey(k=>k+1)} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600 border border-slate-200 px-3 py-1.5 rounded-xl hover:border-slate-300 transition-all flex-shrink-0">
+            <ArrowsClockwise size={12}/> {lang==="id"?"Refresh":"Refresh"}
+          </button>
+        </div>
+        <OwidSection lang={lang} refreshKey={owidKey}/>
       </section>
 
       {/* ── FEATURE TILES ── */}
