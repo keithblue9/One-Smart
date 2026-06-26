@@ -372,18 +372,26 @@ async def market_overview():
                 d = r.json()
                 if d.get("rates", {}).get("IDR"):
                     usd_val = d["rates"]["IDR"]
-                    # Get yesterday's rate for prev_value
-                    try:
-                        from datetime import date, timedelta
-                        yesterday = (date.today() - timedelta(days=1)).isoformat()
-                        r2 = await hx.get(f"https://api.frankfurter.dev/v1/{yesterday}", params={"base": "USD", "symbols": "IDR"})
-                        d2 = r2.json()
-                        prev_usd = d2.get("rates", {}).get("IDR")
-                    except Exception:
-                        prev_usd = None
-                    result["usd_idr"] = {"value": usd_val, "prev_value": round(prev_usd, 0) if prev_usd else None, "source": "frankfurter.dev"}
+                    result["usd_idr"] = {"value": usd_val, "source": "frankfurter.dev"}
             except Exception as e:
                 logger.warning("Frankfurter failed: %s", e)
+            # Get USD/IDR prev_value from Yahoo Finance (always has previousClose, works on weekends)
+            try:
+                r = await hx.get(
+                    "https://query1.finance.yahoo.com/v8/finance/chart/IDR%3DX",
+                    params={"interval": "1d", "range": "5d"},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                d = r.json()
+                meta = d["chart"]["result"][0]["meta"]
+                yf_cur = meta.get("regularMarketPrice")
+                yf_prev = meta.get("previousClose")
+                if yf_cur and not result["usd_idr"]:
+                    result["usd_idr"] = {"value": round(yf_cur, 0), "source": "Yahoo Finance"}
+                if yf_prev and result["usd_idr"]:
+                    result["usd_idr"]["prev_value"] = round(yf_prev, 0)
+            except Exception as e:
+                logger.warning("Yahoo USD/IDR prev failed: %s", e)
             if not result["usd_idr"]:
                 try:
                     r = await hx.get("https://open.er-api.com/v6/latest/USD")

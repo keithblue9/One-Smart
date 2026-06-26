@@ -63,23 +63,66 @@ function StockCard({ s, currency, lang }) {
       </div>
 
       {expanded && (
-        <div className="mt-3 p-3 bg-slate-50 rounded-xl text-xs text-slate-600 space-y-2 leading-relaxed">
-          {s.dividend && (
-            <div className="bg-violet-50 border border-violet-100 rounded-lg p-2 mb-2">
-              <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wider mb-1">🔔 Info Dividen</div>
-              <div className="grid grid-cols-2 gap-1 text-[11px] text-violet-800">
-                <span>Yield: <strong>{s.dividend.yield_pct}%</strong></span>
-                <span>Frekuensi: <strong>{s.dividend.freq}</strong></span>
-                {s.dividend.cum_date && <span>Cum Date: <strong>{s.dividend.cum_date}</strong></span>}
-                {s.dividend.ex_date && <span>Ex Date: <strong>{s.dividend.ex_date}</strong></span>}
-                {s.dividend.payment_date && <span>Bayar: <strong>{s.dividend.payment_date}</strong></span>}
+        <div className="mt-3 space-y-3">
+          {/* Valuasi & Fundamental */}
+          {s.fundamental && (
+            <div className="bg-blue-50 rounded-xl p-3 border border-blue-100">
+              <div className="text-[10px] font-bold text-blue-700 uppercase tracking-wider mb-2">📊 Valuasi & Fundamental</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+                {s.fundamental.pe_trailing && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">P/E Trailing</div><div className="font-bold text-slate-800">{s.fundamental.pe_trailing}x</div></div>}
+                {s.fundamental.pe_forward && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">P/E Forward</div><div className="font-bold text-slate-800">{s.fundamental.pe_forward}x</div></div>}
+                {s.fundamental.pb && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">P/B Ratio</div><div className="font-bold text-slate-800">{s.fundamental.pb}x</div></div>}
+                {s.fundamental.eps_idr && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">EPS (IDR)</div><div className="font-bold text-slate-800">Rp {s.fundamental.eps_idr?.toLocaleString()}</div></div>}
+                {s.fundamental.eps_usd && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">EPS (USD)</div><div className="font-bold text-slate-800">${s.fundamental.eps_usd}</div></div>}
+                {s.fundamental.roe_pct && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">ROE</div><div className="font-bold text-slate-800">{s.fundamental.roe_pct}%</div></div>}
+                {s.fundamental.der && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">DER</div><div className="font-bold text-slate-800">{s.fundamental.der}x</div></div>}
+                {s.fundamental.npm_pct && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">Net Margin</div><div className="font-bold text-slate-800">{s.fundamental.npm_pct}%</div></div>}
+                {s.fundamental.market_cap_t && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">Market Cap</div><div className="font-bold text-slate-800">Rp {s.fundamental.market_cap_t}T</div></div>}
+                {s.fundamental.market_cap_b && <div className="bg-white rounded-lg p-2"><div className="text-slate-400">Market Cap</div><div className="font-bold text-slate-800">${s.fundamental.market_cap_b}B</div></div>}
               </div>
-              {s.dividend.note && <p className="text-[10px] text-violet-600 mt-1">{s.dividend.note}</p>}
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                <div className="bg-emerald-50 rounded-lg p-2"><div className="text-slate-400">Harga Beli Ideal</div><div className="font-bold text-emerald-700">{s.fundamental.beli_ideal_idr || s.fundamental.beli_ideal_usd}</div></div>
+                <div className="bg-amber-50 rounded-lg p-2"><div className="text-slate-400">Target Price</div><div className="font-bold text-amber-700">{s.fundamental.target_price_idr ? "Rp "+s.fundamental.target_price_idr?.toLocaleString() : "$"+s.fundamental.target_price_usd}</div></div>
+              </div>
+              <div className="mt-1 text-[10px]"><span className="text-slate-400">Risk Level: </span><span className="font-medium text-slate-600">{s.fundamental.risk}</span></div>
             </div>
           )}
-          <div><strong className="text-slate-700">📊 Cara baca data ini:</strong> Harga live dari Yahoo Finance, diupdate setiap 2 menit. Rekomendasi (BUY/HOLD/SELL) berdasarkan analisa fundamental kualitatif + posisi dalam siklus bisnis.</div>
-          <div><strong className="text-slate-700">⚠️ Disclaimer:</strong> Ini bukan saran investasi. Selalu lakukan riset mandiri (DYOR) dan pertimbangkan profil risiko kamu sebelum membeli saham apapun.</div>
-          <div><strong className="text-slate-700">🤖 AI Insight:</strong> Klik tombol "AI Insight" di atas untuk mendapat analisa teknikal + fundamental + konteks makro yang komprehensif dari Claude AI.</div>
+          {/* Dividend info */}
+          {s.dividend && (
+            <div className="bg-violet-50 rounded-xl p-3 border border-violet-100">
+              <div className="text-[10px] font-bold text-violet-700 uppercase tracking-wider mb-2">🔔 Info Dividen</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 text-[11px] mb-2">
+                <span className="bg-white rounded-lg p-1.5">Yield: <strong>{s.dividend.yield_pct}%</strong></span>
+                <span className="bg-white rounded-lg p-1.5">Freq: <strong>{s.dividend.freq}</strong></span>
+                {s.dividend.cum_date && <span className="bg-white rounded-lg p-1.5">Cum: <strong>{s.dividend.cum_date}</strong></span>}
+                {s.dividend.ex_date && <span className="bg-white rounded-lg p-1.5">Ex-Date: <strong>{s.dividend.ex_date}</strong></span>}
+                {s.dividend.payment_date && <span className="bg-white rounded-lg p-1.5">Bayar: <strong>{s.dividend.payment_date}</strong></span>}
+              </div>
+              {s.dividend.note && <p className="text-[10px] text-violet-600 mb-2">{s.dividend.note}</p>}
+              {/* 5yr history */}
+              {s.dividend.history && (
+                <div>
+                  <div className="text-[10px] font-bold text-violet-600 mb-1">📅 Histori Dividen 5 Tahun</div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[10px]">
+                      <thead><tr className="text-violet-500"><th className="text-left py-1">Tahun</th><th className="text-right">Ex-Date</th><th className="text-right">Dividen</th><th className="text-right">Yield</th></tr></thead>
+                      <tbody>
+                        {s.dividend.history.map((h,i) => (
+                          <tr key={i} className="border-t border-violet-100">
+                            <td className="py-1 font-bold text-violet-700">{h.year}</td>
+                            <td className="text-right text-slate-600">{h.ex_date || "—"}</td>
+                            <td className="text-right font-medium text-slate-700">{s.dividend.history[0].amount_idr !== undefined ? "Rp "+h.amount_idr?.toLocaleString() : "$"+h.amount_usd}</td>
+                            <td className="text-right text-emerald-600 font-bold">{h.yield_pct}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <p className="text-[10px] text-slate-400">⚠️ Data fundamental bersifat indikatif. Harga live dari Yahoo Finance. Selalu lakukan riset mandiri (DYOR) sebelum investasi.</p>
         </div>
       )}
     </div>
