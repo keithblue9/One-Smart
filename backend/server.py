@@ -598,43 +598,91 @@ async def world_news():
 INSIGHT_PROMPTS = {
     "scholarship": "Anda mentor beasiswa S2 berpengalaman 15+ tahun. Berikan tips & trick KONKRET untuk lolos beasiswa ini berdasarkan data: {context}. Fokus: essay, interview, portfolio, timeline. Output dalam markdown bullet. Maksimal 6 poin actionable, masing-masing 1-2 kalimat. Bahasa: {language}.",
     "salary": "Anda career coach global tech. Berdasarkan data perusahaan: {context}, berikan: (1) Estimasi salary range untuk role utama (entry/mid/senior) dalam USD; (2) 4 tips konkret membangun portofolio yang menarik untuk perusahaan ini. Markdown ringkas. Bahasa: {language}.",
-    "stock": "Anda analis ekuitas senior bersertifikat (CFA-level) dengan spesialisasi pasar Indonesia & global. Untuk saham {context}, buat analisa investasi KOMPREHENSIF dengan struktur markdown:\n\n## Fundamental\nBahas model bisnis, posisi kompetitif (moat), kesehatan keuangan (revenue/laba/utang), dan valuasi (P/E, P/B vs sektor). 1 paragraf padat.\n\n## Analisa Teknikal\nLevel support & resistance kunci, tren (uptrend/downtrend/sideways), momentum (RSI/MACD secara kualitatif), volume. Sebutkan angka harga konkret.\n\n## Konteks Makro\nBagaimana kondisi ekonomi global (suku bunga Fed, geopolitik, harga komoditas) & domestik (BI rate, rupiah, inflasi, kebijakan pemerintah) mempengaruhi saham ini SAAT INI.\n\n## Strategi\nRekomendasi entry/exit konkret, position sizing, time horizon, dan skenario bull/bear.\n\n## Risk-Reward\nRisiko utama + potensi upside, dengan rasio risk/reward.\n\nAkhiri dengan disclaimer singkat. Gunakan angka & data spesifik, hindari generik. Bahasa: {language}.",
-    "investment_strategy": "Anda financial advisor. Berdasarkan kondisi pasar global & Indonesia saat ini, dan context: {context}, berikan strategi alokasi aset untuk horizon yang dipilih. Sertakan: persentase alokasi rekomendasi, alasan, risiko utama, action items minggu ini. Markdown. Bahasa: {language}.",
+    "stock": """Anda analis ekuitas senior CFA-level. Tanggal hari ini: {today}. Gunakan web search untuk mendapatkan data TERKINI sebelum menjawab — cari harga terbaru, berita terkini, kondisi makro saat ini (suku bunga Fed terkini, BI Rate terkini, kurs IDR/USD terkini, harga komoditas relevan).
+
+Untuk saham {context}, buat analisa investasi KOMPREHENSIF berdasarkan data aktual Juni 2026:
+
+## 📊 Fundamental (Data Terkini)
+Model bisnis, moat, kondisi keuangan terbaru (revenue/laba Q1 2026 atau terbaru), valuasi P/E & P/B vs sektor saat ini.
+
+## 📈 Analisa Teknikal (Harga Terkini)
+Harga saat ini, support & resistance kunci, tren terkini (uptrend/downtrend/sideways), momentum. Gunakan harga aktual dari web search.
+
+## 🌍 Konteks Makro TERKINI (Juni 2026)
+- Kondisi global aktual: suku bunga Fed, geopolitik, harga komoditas relevan SEKARANG
+- Kondisi domestik aktual: BI Rate saat ini, kurs IDR/USD terkini, inflasi terbaru, kebijakan pemerintah terbaru
+- Berita/event terbaru yang mempengaruhi saham ini
+
+## 🎯 Strategi
+Entry/exit konkret berdasarkan kondisi pasar SAAT INI, position sizing, skenario bull/bear.
+
+## ⚖️ Risk-Reward
+Risiko utama saat ini + target price. Disclaimer singkat.
+
+Bahasa: {language}. Semua data HARUS dari kondisi aktual 2026, bukan asumsi historis.""",
+    "investment_strategy": "Anda financial advisor. Tanggal hari ini: {today}. Berdasarkan kondisi pasar aktual saat ini dan context: {context}, berikan strategi alokasi aset. Sertakan: persentase alokasi, alasan berdasar kondisi makro terkini, risiko utama, action items minggu ini. Markdown. Bahasa: {language}.",
     "freelance_profile": "Anda freelance growth coach. Untuk platform: {context}, bantu user membuat profile yang menarik. Berikan: (1) Headline draft (3 opsi); (2) Bio template; (3) Skill yang harus dihighlight; (4) Strategi 30 hari pertama. Bahasa: {language}.",
     "cv_recommendation": "Anda CV writer profesional ATS-optimized. Berdasarkan target {context}, berikan: (1) Struktur CV ideal; (2) 6 kata kunci yang harus muncul; (3) Format & template recommendation; (4) 3 common mistakes yang harus dihindari. Markdown. Bahasa: {language}.",
     "trend_advice": "Anda career strategist. Berdasarkan tren pekerjaan {context}, berikan advice konkret: skill yang harus dipelajari sekarang untuk monetisasi cepat 6-12 bulan, dan untuk long term 3-5 tahun. Bahasa: {language}.",
     "city_insight": "Anda relocation consultant. Berdasarkan data kota {context}, berikan: (1) Visa & residence pathway; (2) Estimasi biaya hidup bulanan; (3) Industri kuat & peluang kerja; (4) Tips kultural integrasi. Bahasa: {language}.",
-    "general": "Berikan insight mendalam dan actionable tentang topik berikut: {context}. Maksimal 250 kata, markdown. Bahasa: {language}.",
+    "general": "Berikan insight mendalam dan actionable tentang topik berikut: {context}. Tanggal hari ini: {today}. Maksimal 300 kata, markdown. Bahasa: {language}.",
 }
+
+# Topics that need web search for up-to-date data
+WEB_SEARCH_TOPICS = {"stock", "investment_strategy", "general"}
 
 
 @api.post("/ai/insight")
 async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
-    """Generate AI insight via Claude Sonnet 4.5. Cached in MongoDB per (topic, context_hash)."""
+    """Generate AI insight. Stock/investment topics use web search for real-time data.
+    Cache is date-keyed for stock topics (expires daily)."""
     if not ANTHROPIC_API_KEY:
         raise HTTPException(500, "AI not configured")
 
+    today = datetime.now(timezone.utc).strftime("%d %B %Y")  # e.g. "26 June 2026"
     context_str = json.dumps(req.context, ensure_ascii=False, sort_keys=True)
-    cache_key = hashlib.sha256(f"{req.topic}|{context_str}|{req.language}".encode()).hexdigest()
+
+    # Stock/investment insights are cached per day (not forever)
+    date_suffix = datetime.now(timezone.utc).strftime("%Y-%m-%d") if req.topic in WEB_SEARCH_TOPICS else ""
+    cache_key = hashlib.sha256(f"{req.topic}|{context_str}|{req.language}|{date_suffix}".encode()).hexdigest()
     cached = await db.ai_cache.find_one({"key": cache_key}, {"_id": 0})
     if cached:
         return {"insight": cached["insight"], "cached": True}
 
     prompt_tmpl = INSIGHT_PROMPTS.get(req.topic, INSIGHT_PROMPTS["general"])
-    prompt = prompt_tmpl.format(context=context_str, language="Indonesia" if req.language == "id" else "English")
+    prompt = prompt_tmpl.format(
+        context=context_str,
+        language="Bahasa Indonesia" if req.language == "id" else "English",
+        today=today,
+    )
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
-    system_msg = f"Anda asisten ahli yang memberi insight tajam, akurat, terstruktur. Selalu jawab dalam {lang_label}."
+    system_msg = (
+        f"Anda asisten ahli yang memberi insight tajam, akurat, dan SELALU AKTUAL. "
+        f"Tanggal hari ini adalah {today}. "
+        f"Untuk topik keuangan/investasi, WAJIB gunakan data terkini via web search — "
+        f"jangan gunakan data historis dari memory training jika tersedia data lebih baru. "
+        f"Selalu jawab dalam {lang_label}."
+    )
 
     try:
-        # Use non-streaming call — we need the full response cached
-        # (streaming would complicate caching; for UX we accept short wait)
-        response = await anthropic_client.messages.create(
+        # Use web search for stock/investment topics
+        create_kwargs = dict(
             model=AI_MODEL,
-            max_tokens=2000,
+            max_tokens=2500,
             system=system_msg,
             messages=[{"role": "user", "content": prompt}],
         )
-        insight_text = response.content[0].text
+        if req.topic in WEB_SEARCH_TOPICS:
+            create_kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
+
+        response = await anthropic_client.messages.create(**create_kwargs)
+
+        # Extract text from response (may include web search tool use blocks)
+        insight_text = "".join(
+            b.text for b in response.content if hasattr(b, "text") and b.type == "text"
+        )
+        if not insight_text:
+            raise ValueError("Empty response from AI")
     except Exception as e:
         logger.exception("AI insight failed")
         raise HTTPException(500, f"AI error: {e}")
@@ -646,6 +694,7 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
         "language": req.language,
         "insight": insight_text,
         "created_at": now_iso(),
+        "date": date_suffix or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     })
     return {"insight": insight_text, "cached": False}
 
@@ -1142,6 +1191,13 @@ async def debug_ai():
             info["test_call"] = "failed"
             info["error"] = str(e)
     return info
+
+
+@api.delete("/debug/clear-stock-cache")
+async def clear_stock_cache():
+    """Clear all stock/investment insight caches so they regenerate with fresh web search data."""
+    result = await db.ai_cache.delete_many({"topic": {"$in": list(WEB_SEARCH_TOPICS)}})
+    return {"deleted": result.deleted_count, "message": "Stock/investment cache cleared. Next insights will use web search."}
 
 
 @api.get("/debug/passcode")
