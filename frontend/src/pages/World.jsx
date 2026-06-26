@@ -14,7 +14,10 @@ const catColor = {
   Ekonomi:"bg-amber-50 text-amber-700", Teknologi:"bg-blue-50 text-blue-700",
   Geopolitik:"bg-red-50 text-red-700", Bisnis:"bg-emerald-50 text-emerald-700",
   Kesehatan:"bg-pink-50 text-pink-700", Lingkungan:"bg-green-50 text-green-700",
-  Info:"bg-slate-100 text-slate-600",
+  Info:"bg-slate-100 text-slate-600", Pasar:"bg-violet-50 text-violet-700",
+  Indonesia:"bg-red-50 text-red-700",
+  "Sepak Bola":"bg-green-50 text-green-700",
+  Olahraga:"bg-green-50 text-green-700",
 };
 
 // ── OWID data with richer context ────────────────────────────────────────────
