@@ -44,7 +44,7 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 DEFAULT_PASSCODE = os.environ.get("DEFAULT_PASSCODE", "991285")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-AI_MODEL = "claude-haiku-4-5-20251001"          # Fast & cheap for most tasks
+AI_MODEL = "claude-sonnet-4-6"                  # Sonnet for all tasks (quality)
 AI_WEB_MODEL = "claude-sonnet-4-6"              # Required for web_search tool
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY_PEM = os.environ.get("VAPID_PRIVATE_KEY_PEM", "").replace("\\n", "\n")
