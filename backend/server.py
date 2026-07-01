@@ -1,5 +1,5 @@
 """One Smart PWA — FastAPI backend."""
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -46,6 +46,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 AI_MODEL = "claude-sonnet-4-6"                  # Sonnet for all tasks (quality)
 AI_WEB_MODEL = "claude-sonnet-4-6"              # Required for web_search tool
+AI_FAST_MODEL = "claude-haiku-4-5-20251001"     # Haiku for quick generation (cities/travel, no web search)
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY_PEM = os.environ.get("VAPID_PRIVATE_KEY_PEM", "").replace("\\n", "\n")
 VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "admin@onesmart.app")
@@ -496,8 +497,8 @@ async def jakarta_today():
 
 
 @api.get("/world/cities-dynamic")
-async def cities_dynamic(refresh: int = 0):
-    """AI-generated liveable cities guide, rotates via refresh param. Cached in MongoDB per rotation."""
+async def cities_dynamic(refresh: int = 0, background_tasks: BackgroundTasks = None):
+    """AI-generated liveable cities guide, rotates via refresh param. Stale-while-revalidate."""
     now = datetime.now(timezone.utc)
     key = f"cities-{now.strftime('%Y-%m-%d')}-{refresh % 4}"
     cached = await db.world_cache.find_one({"key": key}, {"_id": 0})
@@ -506,7 +507,6 @@ async def cities_dynamic(refresh: int = 0):
     if not ANTHROPIC_API_KEY:
         return {"items": []}
 
-    # Rotate city pools so each refresh shows different cities
     pools = [
         "Vienna, Tokyo, Singapore, Zurich",
         "Melbourne, Amsterdam, Copenhagen, Berlin",
@@ -516,7 +516,7 @@ async def cities_dynamic(refresh: int = 0):
     chosen = pools[refresh % 4]
     try:
         response = await anthropic_client.messages.create(
-            model=AI_MODEL, max_tokens=3000,
+            model=AI_FAST_MODEL, max_tokens=3000,
             messages=[{"role": "user", "content": (
                 f"Buat panduan relokasi untuk 4 kota ini (khusus profesional Indonesia): {chosen}. "
                 f"Untuk tiap kota, output JSON dengan field: city, country (dengan emoji bendera), score (angka 85-99), "
@@ -565,7 +565,7 @@ async def travel_dynamic(refresh: int = 0):
     chosen = pools[refresh % 4]
     try:
         response = await anthropic_client.messages.create(
-            model=AI_MODEL, max_tokens=3000,
+            model=AI_FAST_MODEL, max_tokens=3000,
             messages=[{"role": "user", "content": (
                 f"Buat panduan travel lengkap untuk 4 destinasi Indonesia ini: {chosen}. "
                 f"Untuk tiap destinasi, output JSON dengan field: name, region (provinsi), type (Nature/Diving/Culture/Adventure/dll), "
@@ -593,23 +593,9 @@ async def travel_dynamic(refresh: int = 0):
     return data
 
 
-@api.get("/world/jakarta-live")
-async def jakarta_live():
-    """Live Jakarta daily info via Claude web search. Cached in MongoDB (persists across restarts), 6h TTL."""
+async def _refresh_jakarta_bg(daily_key: str):
+    """Background task to refresh Jakarta data without blocking the response."""
     now = datetime.now(timezone.utc)
-    date_key = now.strftime("%Y-%m-%d-%H")[:12]  # rotate ~ every few hours won't help; use daily
-    daily_key = "jakarta-" + now.strftime("%Y-%m-%d")
-
-    cached = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
-    if cached:
-        # refresh if older than 6h
-        age = (now - datetime.fromisoformat(cached["cached_at"])).total_seconds()
-        if age < 21600:
-            return cached["data"]
-
-    if not ANTHROPIC_API_KEY:
-        return {"items": JAKARTA_AGENDA, "updated_at": now_iso()}
-
     try:
         today = now.strftime("%d %B %Y")
         response = await anthropic_client.messages.create(
@@ -634,36 +620,53 @@ async def jakarta_live():
         start = text.find("[")
         end = text.rfind("]")
         items = json.loads(text[start:end+1]) if start >= 0 else []
-        if not items:
-            raise ValueError("empty")
+        if items:
+            data = {"items": items, "updated_at": now_iso()}
+            await db.world_cache.update_one(
+                {"key": daily_key},
+                {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
+                upsert=True,
+            )
     except Exception as e:
-        logger.warning("Jakarta live AI failed: %s", e)
-        return {"items": JAKARTA_AGENDA, "updated_at": now_iso()}
-
-    data = {"items": items, "updated_at": now_iso()}
-    await db.world_cache.update_one(
-        {"key": daily_key},
-        {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
-        upsert=True,
-    )
-    return data
+        logger.warning("Jakarta bg refresh failed: %s", e)
 
 
-@api.get("/world/news")
-async def world_news():
-    """Live world news via Claude web search. Cached in MongoDB (persists across restarts), 3h TTL."""
+@api.get("/world/jakarta-live")
+async def jakarta_live(background_tasks: BackgroundTasks):
+    """Live Jakarta info. Returns cached/static instantly, refreshes in background (stale-while-revalidate)."""
     now = datetime.now(timezone.utc)
-    daily_key = "news-" + now.strftime("%Y-%m-%d-%H")[:13]  # per-hour bucket
+    daily_key = "jakarta-" + now.strftime("%Y-%m-%d")
 
     cached = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
     if cached:
         age = (now - datetime.fromisoformat(cached["cached_at"])).total_seconds()
-        if age < 10800:  # 3h
+        # Fresh enough — return immediately
+        if age < 21600:  # 6h
             return cached["data"]
+        # Stale — return stale data NOW, refresh in background
+        if ANTHROPIC_API_KEY:
+            background_tasks.add_task(_refresh_jakarta_bg, daily_key)
+        return cached["data"]
 
-    if not ANTHROPIC_API_KEY:
-        return {"items": [{"category": "Info", "title": "Berita real-time butuh konfigurasi AI", "summary": "Set ANTHROPIC_API_KEY untuk berita live."}], "updated_at": now_iso()}
+    # No cache at all — return static instantly, kick off background fetch
+    if ANTHROPIC_API_KEY:
+        background_tasks.add_task(_refresh_jakarta_bg, daily_key)
+    return {"items": JAKARTA_AGENDA, "updated_at": now_iso(), "loading": True}
 
+
+NEWS_STATIC_FALLBACK = [
+    {"category":"Ekonomi","title":"Pasar Global Bergerak Mixed","summary":"Indeks saham global bergerak mixed jelang rilis data inflasi AS. Investor wait-and-see terkait arah kebijakan Fed dan sinyal pemangkasan suku bunga."},
+    {"category":"Indonesia","title":"Ekonomi Indonesia Tumbuh Stabil","summary":"Pemerintah optimis target pertumbuhan ekonomi 5.2% tercapai tahun ini. Ekspor nonmigas naik didorong komoditas nikel dan produk hilirisasi."},
+    {"category":"Pasar","title":"IHSG & Rupiah Dalam Sorotan","summary":"IHSG bergerak fluktuatif mengikuti sentimen global. Rupiah relatif stabil di kisaran Rp 16.000-an per dolar AS dengan intervensi BI yang terukur."},
+    {"category":"Teknologi","title":"AI Terus Berkembang Pesat","summary":"Rilis model AI terbaru dari perusahaan teknologi global mendominasi berita. Adopsi AI di sektor bisnis Indonesia terus meningkat, terutama fintech & e-commerce."},
+    {"category":"Sepak Bola","title":"Update Kompetisi Sepak Bola","summary":"Liga Champions, Premier League, dan Liga 1 Indonesia terus berlangsung seru. Timnas Indonesia melanjutkan persiapan untuk laga kualifikasi mendatang."},
+    {"category":"Geopolitik","title":"Dinamika Geopolitik Global","summary":"Ketegangan geopolitik di beberapa kawasan mempengaruhi harga energi dan rantai pasok global. Indonesia menjaga posisi netral dan fokus diplomasi ekonomi."},
+]
+
+
+async def _refresh_news_bg(daily_key: str):
+    """Background task to refresh world news without blocking."""
+    now = datetime.now(timezone.utc)
     try:
         today = now.strftime("%d %B %Y")
         response = await anthropic_client.messages.create(
@@ -673,48 +676,59 @@ async def world_news():
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari 8 berita terkini paling penting hari ini ({today}) yang relevan untuk pembaca Indonesia muda (millennial), "
-                    f"meliputi kategori berikut (wajib ada semua): "
-                    f"1) Ekonomi global & Indonesia (minimal 2 berita), "
-                    f"2) Geopolitik & hubungan internasional (1 berita), "
-                    f"3) Teknologi & AI terbaru (1 berita), "
-                    f"4) Pasar finansial (IHSG, saham, kripto) (1 berita), "
-                    f"5) Sepak bola & olahraga (hasil pertandingan terbaru, Liga Champions/Premier League/Liga 1/Timnas Indonesia) (2 berita), "
-                    f"6) Berita Indonesia terkini (1 berita). "
-                    f"Untuk tiap berita berikan: kategori, judul ringkas & menarik, dan ringkasan 2-3 kalimat yang informatif dan faktual. "
-                    f"Output HANYA JSON array murni (tanpa markdown fences, tanpa penjelasan lain), format tepat: "
+                    f"Cari 8 berita terkini paling penting hari ini ({today}) untuk pembaca Indonesia muda, "
+                    f"wajib mencakup: 2 ekonomi (global & Indonesia), 1 geopolitik, 1 teknologi/AI, "
+                    f"1 pasar finansial (IHSG/saham/kripto), 2 sepak bola/olahraga (Liga Champions/Premier League/Liga 1/Timnas), "
+                    f"1 berita Indonesia. Tiap berita: kategori, judul menarik, ringkasan 2-3 kalimat faktual. "
+                    f"Output HANYA JSON array murni: "
                     f'[{{"category":"...","title":"...","summary":"..."}}]. '
-                    f"Kategori gunakan: Ekonomi, Geopolitik, Teknologi, Pasar, Sepak Bola, Olahraga, Indonesia, Bisnis, Kesehatan. "
-                    f"Bahasa Indonesia."
+                    f"Kategori: Ekonomi, Geopolitik, Teknologi, Pasar, Sepak Bola, Olahraga, Indonesia. Bahasa Indonesia. JSON saja."
                 ),
             }],
         )
         text = "".join(b.text for b in response.content if hasattr(b, "text") and b.type == "text")
         if "```" in text:
             text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        start = text.find("[")
-        end = text.rfind("]")
+            if text.startswith("json"): text = text[4:]
+        start, end = text.find("["), text.rfind("]")
         items = json.loads(text[start:end+1]) if start >= 0 else []
-        if not items:
-            raise ValueError("Empty items from AI")
+        if items:
+            data = {"items": items, "updated_at": now_iso()}
+            await db.world_cache.update_one(
+                {"key": daily_key},
+                {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
+                upsert=True,
+            )
     except Exception as e:
-        logger.warning("World news AI failed: %s", e)
-        items = [
-            {"category":"Ekonomi","title":"Pasar Global Bergerak Mixed","summary":"Indeks saham global bergerak mixed jelang rilis data inflasi AS minggu ini. Investor wait-and-see terkait arah kebijakan Fed."},
-            {"category":"Indonesia","title":"Update Ekonomi Indonesia","summary":"Pemerintah optimis target pertumbuhan ekonomi 5.2% tercapai di 2026. Ekspor nonmigas naik didorong komoditas nikel dan kelapa sawit."},
-            {"category":"Sepak Bola","title":"Update Sepak Bola Terkini","summary":"Kompetisi sepak bola Eropa dan domestik terus berlangsung. Pantau skor terbaru di aplikasi atau website resmi liga."},
-            {"category":"Teknologi","title":"AI Terus Berkembang Pesat","summary":"Rilis model AI terbaru dari berbagai perusahaan teknologi global mendominasi berita minggu ini. Adopsi AI di sektor bisnis terus meningkat."},
-        ]
+        logger.warning("News bg refresh failed: %s", e)
 
-    data = {"items": items, "updated_at": now_iso()}
-    await db.world_cache.update_one(
-        {"key": daily_key},
-        {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
-        upsert=True,
+
+@api.get("/world/news")
+async def world_news(background_tasks: BackgroundTasks):
+    """World news, stale-while-revalidate. Returns cached/static instantly, refreshes in background."""
+    now = datetime.now(timezone.utc)
+    daily_key = "news-" + now.strftime("%Y-%m-%d-%H")[:13]  # hourly bucket
+
+    cached = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
+    if cached:
+        age = (now - datetime.fromisoformat(cached["cached_at"])).total_seconds()
+        if age < 3600:  # fresh within 1h
+            return cached["data"]
+        if ANTHROPIC_API_KEY:
+            background_tasks.add_task(_refresh_news_bg, daily_key)
+        return cached["data"]  # stale but instant
+
+    # No cache — try most recent cache from earlier today as fallback
+    recent = await db.world_cache.find_one(
+        {"key": {"$regex": "^news-" + now.strftime("%Y-%m-%d")}},
+        {"_id": 0}, sort=[("cached_at", -1)],
     )
-    return data
+    if ANTHROPIC_API_KEY:
+        background_tasks.add_task(_refresh_news_bg, daily_key)
+    if recent:
+        return recent["data"]
+    # First-ever load — static instant, background will populate
+    return {"items": NEWS_STATIC_FALLBACK, "updated_at": now_iso(), "loading": True}
 
 
 # ============== AI INSIGHT (Claude Sonnet 4.5) ==============

@@ -160,10 +160,16 @@ export default function World() {
   const [citiesLoading, setCitiesLoading] = useState(false);
   const [travelLoading, setTravelLoading] = useState(false);
 
-  const fetchJakarta = () => {
-    setJakLoading(true);
+  const fetchJakarta = (isPoll = false) => {
+    if (!isPoll) setJakLoading(true);
     api.get("/world/jakarta-live")
-      .then(r => setJakarta(r.data.items || []))
+      .then(r => {
+        setJakarta(r.data.items || []);
+        // If backend is still generating fresh data in background, poll again
+        if (r.data.loading) {
+          setTimeout(() => fetchJakarta(true), 4000);
+        }
+      })
       .catch(() => setJakarta([]))
       .finally(() => setJakLoading(false));
   };
@@ -185,10 +191,20 @@ export default function World() {
   };
 
   useEffect(() => {
-    setNewsLoading(true);
-    api.get("/world/news")
-      .then(r => { setNews(r.data.items || []); setNewsLoading(false); })
-      .catch(() => setNewsLoading(false));
+    const loadNews = (isPoll = false) => {
+      if (!isPoll) setNewsLoading(true);
+      api.get("/world/news")
+        .then(r => {
+          setNews(r.data.items || []);
+          setNewsLoading(false);
+          // Backend still generating fresh news in background — poll for update
+          if (r.data.loading) {
+            setTimeout(() => loadNews(true), 5000);
+          }
+        })
+        .catch(() => setNewsLoading(false));
+    };
+    loadNews();
   }, []);
 
   return (
