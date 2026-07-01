@@ -495,13 +495,117 @@ async def jakarta_today():
     return {"items": JAKARTA_AGENDA, "updated_at": now_iso()}
 
 
+@api.get("/world/cities-dynamic")
+async def cities_dynamic(refresh: int = 0):
+    """AI-generated liveable cities guide, rotates via refresh param. Cached in MongoDB per rotation."""
+    now = datetime.now(timezone.utc)
+    key = f"cities-{now.strftime('%Y-%m-%d')}-{refresh % 4}"
+    cached = await db.world_cache.find_one({"key": key}, {"_id": 0})
+    if cached:
+        return cached["data"]
+    if not ANTHROPIC_API_KEY:
+        return {"items": []}
+
+    # Rotate city pools so each refresh shows different cities
+    pools = [
+        "Vienna, Tokyo, Singapore, Zurich",
+        "Melbourne, Amsterdam, Copenhagen, Berlin",
+        "Lisbon, Barcelona, Dubai, Seoul",
+        "Vancouver, Auckland, Munich, Helsinki",
+    ]
+    chosen = pools[refresh % 4]
+    try:
+        response = await anthropic_client.messages.create(
+            model=AI_MODEL, max_tokens=3000,
+            messages=[{"role": "user", "content": (
+                f"Buat panduan relokasi untuk 4 kota ini (khusus profesional Indonesia): {chosen}. "
+                f"Untuk tiap kota, output JSON dengan field: city, country (dengan emoji bendera), score (angka 85-99), "
+                f"why (2 kalimat kenapa kota ini menarik), visa (info visa/residency untuk WNI), "
+                f"cost (biaya hidup bulanan konkret dengan angka), work (industri & peluang kerja), "
+                f"flight (estimasi harga tiket dari Jakarta dalam USD), avg_salary_usd (angka gaji rata-rata tahunan USD). "
+                f"Output HANYA JSON array murni: "
+                f'[{{"city":"...","country":"...","score":..,"why":"...","visa":"...","cost":"...","work":"...","flight":"...","avg_salary_usd":..}}]. '
+                f"Bahasa Indonesia. JSON saja."
+            )}],
+        )
+        text = response.content[0].text
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"): text = text[4:]
+        start, end = text.find("["), text.rfind("]")
+        items = json.loads(text[start:end+1]) if start >= 0 else []
+        if not items:
+            raise ValueError("empty")
+    except Exception as e:
+        logger.warning("Cities dynamic failed: %s", e)
+        return {"items": []}
+
+    data = {"items": items, "updated_at": now_iso()}
+    await db.world_cache.update_one({"key": key}, {"$set": {"key": key, "data": data, "cached_at": now.isoformat()}}, upsert=True)
+    return data
+
+
+@api.get("/world/travel-dynamic")
+async def travel_dynamic(refresh: int = 0):
+    """AI-generated Indonesia travel guide, rotates via refresh param. Cached in MongoDB."""
+    now = datetime.now(timezone.utc)
+    key = f"travel-{now.strftime('%Y-%m-%d')}-{refresh % 4}"
+    cached = await db.world_cache.find_one({"key": key}, {"_id": 0})
+    if cached:
+        return cached["data"]
+    if not ANTHROPIC_API_KEY:
+        return {"items": []}
+
+    pools = [
+        "Labuan Bajo & Komodo, Raja Ampat, Bromo-Ijen Jawa Timur, Yogyakarta",
+        "Sumba, Belitung, Danau Toba, Wakatobi",
+        "Bali Utara (Amed/Lovina), Lombok & Gili, Dieng, Bunaken Manado",
+        "Kepulauan Derawan, Banda Neira, Tana Toraja, Pulau Weh Sabang",
+    ]
+    chosen = pools[refresh % 4]
+    try:
+        response = await anthropic_client.messages.create(
+            model=AI_MODEL, max_tokens=3000,
+            messages=[{"role": "user", "content": (
+                f"Buat panduan travel lengkap untuk 4 destinasi Indonesia ini: {chosen}. "
+                f"Untuk tiap destinasi, output JSON dengan field: name, region (provinsi), type (Nature/Diving/Culture/Adventure/dll), "
+                f"desc (3 kalimat menarik & informatif), best_time (waktu terbaik berkunjung), "
+                f"budget (estimasi budget konkret dalam Rupiah), tips (tips praktis), getting_there (cara ke sana dari Jakarta). "
+                f"Output HANYA JSON array murni: "
+                f'[{{"name":"...","region":"...","type":"...","desc":"...","best_time":"...","budget":"...","tips":"...","getting_there":"..."}}]. '
+                f"Bahasa Indonesia. JSON saja."
+            )}],
+        )
+        text = response.content[0].text
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"): text = text[4:]
+        start, end = text.find("["), text.rfind("]")
+        items = json.loads(text[start:end+1]) if start >= 0 else []
+        if not items:
+            raise ValueError("empty")
+    except Exception as e:
+        logger.warning("Travel dynamic failed: %s", e)
+        return {"items": []}
+
+    data = {"items": items, "updated_at": now_iso()}
+    await db.world_cache.update_one({"key": key}, {"$set": {"key": key, "data": data, "cached_at": now.isoformat()}}, upsert=True)
+    return data
+
+
 @api.get("/world/jakarta-live")
 async def jakarta_live():
-    """Live Jakarta daily info generated by Claude with web search (cached 2h)."""
-    cache = getattr(jakarta_live, "_cache", None)
+    """Live Jakarta daily info via Claude web search. Cached in MongoDB (persists across restarts), 6h TTL."""
     now = datetime.now(timezone.utc)
-    if cache and (now - cache["t"]).total_seconds() < 7200:
-        return cache["data"]
+    date_key = now.strftime("%Y-%m-%d-%H")[:12]  # rotate ~ every few hours won't help; use daily
+    daily_key = "jakarta-" + now.strftime("%Y-%m-%d")
+
+    cached = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
+    if cached:
+        # refresh if older than 6h
+        age = (now - datetime.fromisoformat(cached["cached_at"])).total_seconds()
+        if age < 21600:
+            return cached["data"]
 
     if not ANTHROPIC_API_KEY:
         return {"items": JAKARTA_AGENDA, "updated_at": now_iso()}
@@ -510,20 +614,16 @@ async def jakarta_live():
         today = now.strftime("%d %B %Y")
         response = await anthropic_client.messages.create(
             model=AI_WEB_MODEL,
-            max_tokens=2500,
+            max_tokens=1800,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari informasi Jakarta hari ini ({today}), meliputi: "
-                    f"(1) Event & hiburan yang sedang berlangsung atau akan datang dalam 7 hari, "
-                    f"(2) Update transportasi penting (MRT, LRT, busway, tol), "
-                    f"(3) Info cuaca & kualitas udara Jakarta hari ini, "
-                    f"(4) Agenda pemerintah atau berita penting kota Jakarta, "
-                    f"(5) Tips atau info berguna untuk warga Jakarta hari ini. "
+                    f"Cari info Jakarta hari ini ({today}): event/hiburan 7 hari ke depan, "
+                    f"update MRT/LRT/busway, cuaca & kualitas udara, agenda kota, tips warga. "
                     f"Output HANYA JSON array murni (tanpa markdown), format: "
                     f'[{{"emoji":"...","category":"...","title":"...","date":"...","location":"...","summary":"...","tip":"..."}}]. '
-                    f"Buat 6-8 item. emoji harus relevan (🎭🚇🌤️🏛️💡🎪🚦dll). Bahasa Indonesia."
+                    f"Buat 6-8 item, emoji relevan. Bahasa Indonesia. JSON saja, tanpa penjelasan."
                 ),
             }],
         )
@@ -534,29 +634,35 @@ async def jakarta_live():
         start = text.find("[")
         end = text.rfind("]")
         items = json.loads(text[start:end+1]) if start >= 0 else []
+        if not items:
+            raise ValueError("empty")
     except Exception as e:
         logger.warning("Jakarta live AI failed: %s", e)
-        items = [{"emoji":"📌","category":"Info","title":"Gagal memuat info Jakarta","summary":"Coba refresh beberapa saat lagi."}]
+        return {"items": JAKARTA_AGENDA, "updated_at": now_iso()}
 
     data = {"items": items, "updated_at": now_iso()}
-    jakarta_live._cache = {"t": now, "data": data}
+    await db.world_cache.update_one(
+        {"key": daily_key},
+        {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
+        upsert=True,
+    )
     return data
 
 
 @api.get("/world/news")
 async def world_news():
-    """Live world news brief generated by Claude with web search (cached 2h)."""
-    cache = getattr(world_news, "_cache", None)
+    """Live world news via Claude web search. Cached in MongoDB (persists across restarts), 3h TTL."""
     now = datetime.now(timezone.utc)
-    if cache and (now - cache["t"]).total_seconds() < 7200:
-        return cache["data"]
+    daily_key = "news-" + now.strftime("%Y-%m-%d-%H")[:13]  # per-hour bucket
+
+    cached = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
+    if cached:
+        age = (now - datetime.fromisoformat(cached["cached_at"])).total_seconds()
+        if age < 10800:  # 3h
+            return cached["data"]
 
     if not ANTHROPIC_API_KEY:
-        # fallback static
-        items = [
-            {"category": "Info", "title": "Berita real-time butuh konfigurasi AI", "summary": "Set ANTHROPIC_API_KEY untuk berita live."},
-        ]
-        return {"items": items, "updated_at": now_iso()}
+        return {"items": [{"category": "Info", "title": "Berita real-time butuh konfigurasi AI", "summary": "Set ANTHROPIC_API_KEY untuk berita live."}], "updated_at": now_iso()}
 
     try:
         today = now.strftime("%d %B %Y")
@@ -603,7 +709,11 @@ async def world_news():
         ]
 
     data = {"items": items, "updated_at": now_iso()}
-    world_news._cache = {"t": now, "data": data}
+    await db.world_cache.update_one(
+        {"key": daily_key},
+        {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
+        upsert=True,
+    )
     return data
 
 

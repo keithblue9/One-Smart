@@ -149,12 +149,16 @@ const TRAVEL_RICH = [
 export default function World() {
   const { lang } = useAuth();
   const [news, setNews] = useState([]);
-  const [cities] = useState(CITIES_DETAIL);
-  const [travel] = useState(TRAVEL_RICH);
+  const [cities, setCities] = useState(CITIES_DETAIL);
+  const [travel, setTravel] = useState(TRAVEL_RICH);
   const [owid] = useState(OWID_RICH);
   const [newsLoading, setNewsLoading] = useState(true);
   const [jakarta, setJakarta] = useState([]);
   const [jakLoading, setJakLoading] = useState(false);
+  const [citiesRefresh, setCitiesRefresh] = useState(0);
+  const [travelRefresh, setTravelRefresh] = useState(0);
+  const [citiesLoading, setCitiesLoading] = useState(false);
+  const [travelLoading, setTravelLoading] = useState(false);
 
   const fetchJakarta = () => {
     setJakLoading(true);
@@ -162,6 +166,22 @@ export default function World() {
       .then(r => setJakarta(r.data.items || []))
       .catch(() => setJakarta([]))
       .finally(() => setJakLoading(false));
+  };
+
+  const fetchCities = (refresh) => {
+    setCitiesLoading(true);
+    api.get(`/world/cities-dynamic?refresh=${refresh}`)
+      .then(r => { if (r.data.items?.length) setCities(r.data.items); })
+      .catch(() => {})
+      .finally(() => setCitiesLoading(false));
+  };
+
+  const fetchTravel = (refresh) => {
+    setTravelLoading(true);
+    api.get(`/world/travel-dynamic?refresh=${refresh}`)
+      .then(r => { if (r.data.items?.length) setTravel(r.data.items); })
+      .catch(() => {})
+      .finally(() => setTravelLoading(false));
   };
 
   useEffect(() => {
@@ -262,15 +282,26 @@ export default function World() {
 
         {/* CITIES */}
         <TabsContent value="cities" className="mt-5">
-          <div className="mb-4 p-4 bg-emerald-50 rounded-xl border border-emerald-100">
-            <p className="text-xs text-emerald-700 font-medium">🏙️ {lang==="id"?"Panduan pindah & karier di kota-kota terbaik dunia — visa, biaya hidup, peluang kerja, dan tips praktis untuk WNI.":"Guide to moving & working in the world's best cities — visas, cost of living, job opportunities, and practical tips for Indonesians."}</p>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex-1 p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+              <p className="text-xs text-emerald-700 font-medium">🏙️ {lang==="id"?"Panduan pindah & karier di kota-kota terbaik dunia — visa, biaya hidup, peluang kerja, dan tips praktis untuk WNI.":"Guide to moving & working in the world's best cities — visas, cost of living, job opportunities, and practical tips for Indonesians."}</p>
+            </div>
+            <button onClick={()=>{const n=citiesRefresh+1;setCitiesRefresh(n);fetchCities(n);}} disabled={citiesLoading}
+              className="flex-shrink-0 flex items-center gap-1.5 text-xs text-emerald-700 border border-emerald-200 bg-white px-3 py-2.5 rounded-xl hover:bg-emerald-50 disabled:opacity-50 transition-all">
+              <ChartBar size={13} className={citiesLoading?"animate-pulse":""}/> {lang==="id"?"Kota Lain":"Other Cities"}
+            </button>
           </div>
+          {citiesLoading && <div className="space-y-4 mb-4">{[1,2].map(i=><div key={i} className="h-40 bg-slate-100 rounded-2xl animate-pulse"/>)}</div>}
           <div className="space-y-6">
             {cities.map(c=>(
               <article key={c.city} className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                 <div className="grid grid-cols-1 lg:grid-cols-3">
-                  <div className="relative h-48 lg:h-auto">
-                    <img src={c.img} alt={c.city} className="w-full h-full object-cover"/>
+                  <div className="relative h-48 lg:h-auto min-h-[140px] bg-gradient-to-br from-emerald-100 to-teal-50 flex items-center justify-center">
+                    {c.img ? (
+                      <img src={c.img} alt={c.city} className="w-full h-full object-cover absolute inset-0"/>
+                    ) : (
+                      <div className="text-5xl">🏙️</div>
+                    )}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent lg:hidden"/>
                     <div className="absolute bottom-3 left-3 lg:hidden">
                       <div className="text-white font-bold text-lg">{c.city}</div>
@@ -304,7 +335,7 @@ export default function World() {
                       <div className="bg-slate-50 rounded-xl p-3">
                         <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">✈️ DARI JAKARTA</div>
                         <p className="text-xs text-slate-700">{c.flight}</p>
-                        <p className="text-xs text-slate-500 mt-1">Gaji rata-rata: <strong>${c.avg_salary_usd.toLocaleString()}/tahun</strong></p>
+                        {c.avg_salary_usd && <p className="text-xs text-slate-500 mt-1">Gaji rata-rata: <strong>${Number(c.avg_salary_usd).toLocaleString()}/tahun</strong></p>}
                       </div>
                     </div>
                     <div className="mt-4">
@@ -319,14 +350,25 @@ export default function World() {
 
         {/* TRAVEL */}
         <TabsContent value="travel" className="mt-5">
-          <div className="mb-4 p-4 bg-orange-50 rounded-xl border border-orange-100">
-            <p className="text-xs text-orange-700 font-medium">✈️ {lang==="id"?"Panduan lengkap destinasi Indonesia — waktu terbaik, estimasi budget, tips praktis, dan cara ke sana.":"Complete Indonesia destination guides — best time, budget estimates, practical tips, and how to get there."}</p>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex-1 p-4 bg-orange-50 rounded-xl border border-orange-100">
+              <p className="text-xs text-orange-700 font-medium">✈️ {lang==="id"?"Panduan lengkap destinasi Indonesia — waktu terbaik, estimasi budget, tips praktis, dan cara ke sana.":"Complete Indonesia destination guides — best time, budget estimates, practical tips, and how to get there."}</p>
+            </div>
+            <button onClick={()=>{const n=travelRefresh+1;setTravelRefresh(n);fetchTravel(n);}} disabled={travelLoading}
+              className="flex-shrink-0 flex items-center gap-1.5 text-xs text-orange-700 border border-orange-200 bg-white px-3 py-2.5 rounded-xl hover:bg-orange-50 disabled:opacity-50 transition-all">
+              <Airplane size={13} className={travelLoading?"animate-pulse":""}/> {lang==="id"?"Destinasi Lain":"Other Places"}
+            </button>
           </div>
+          {travelLoading && <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-4">{[1,2].map(i=><div key={i} className="h-64 bg-slate-100 rounded-2xl animate-pulse"/>)}</div>}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {travel.map((d,i)=>(
               <article key={i} className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                <div className="relative h-48">
-                  <img src={d.img} alt={d.name} className="w-full h-full object-cover" onError={e=>{e.target.style.display="none"}}/>
+                <div className="relative h-48 bg-gradient-to-br from-orange-100 to-amber-50 flex items-center justify-center">
+                  {d.img ? (
+                    <img src={d.img} alt={d.name} className="w-full h-full object-cover absolute inset-0" onError={e=>{e.target.style.display="none"}}/>
+                  ) : (
+                    <div className="text-5xl">🏝️</div>
+                  )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent"/>
                   <div className="absolute bottom-3 left-3 right-3">
                     <span className="text-[11px] bg-white/20 backdrop-blur-sm text-white px-2 py-0.5 rounded-full">{d.type}</span>
