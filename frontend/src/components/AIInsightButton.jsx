@@ -47,7 +47,7 @@ export default function AIInsightButton({ topic, context, label, testId = "ai-in
               {t(lang, "ai_insight")}
             </DialogTitle>
             <DialogDescription className="text-xs text-ink-muted">
-              Powered by Claude Sonnet 4.5
+              Powered by Perplexity Sonar
             </DialogDescription>
           </DialogHeader>
           <div className="mt-2">

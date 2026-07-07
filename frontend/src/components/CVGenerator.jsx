@@ -89,8 +89,8 @@ export default function CVGenerator() {
         <Sparkle size={20} weight="fill" className="text-bronze mt-0.5" />
         <p className="text-sm">
           {lang === "id"
-            ? "Isi data Anda. AI Claude Sonnet 4.5 akan memperkaya summary, action-verb bullets ATS-friendly, dan tips optimisasi sebelum PDF di-download."
-            : "Fill your details. Claude Sonnet 4.5 will enrich your summary, action-verb bullets, and add optimization tips before downloading the PDF."}
+            ? "Isi data Anda. AI Perplexity Sonar akan memperkaya summary, action-verb bullets ATS-friendly, dan tips optimisasi sebelum PDF di-download."
+            : "Fill your details. Perplexity Sonar will enrich your summary, action-verb bullets, and add optimization tips before downloading the PDF."}
         </p>
       </div>
 

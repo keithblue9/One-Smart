@@ -106,7 +106,7 @@ class TestCVGenerate:
             "skills": ["Python", "FastAPI", "MongoDB"],
             "language": "id",
         }
-        # Claude enrichment can take a while
+        # AI enrichment can take a while
         r = api_client.post(f"{BASE_URL}/api/cv/generate", json=payload, timeout=60)
         assert r.status_code == 200, f"CV failed: {r.text[:300]}"
         ct = r.headers.get("content-type", "")

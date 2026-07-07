@@ -210,7 +210,7 @@ export default function LifeGoalAssistant() {
                 </button>
               </div>
               <p className="text-[10px] text-slate-400 mt-1.5 text-center">
-                Powered by Claude · {lang === "id" ? "Bukan pengganti profesional berlisensi" : "Not a substitute for licensed professionals"}
+                Powered by Perplexity · {lang === "id" ? "Bukan pengganti profesional berlisensi" : "Not a substitute for licensed professionals"}
               </p>
             </div>
           </div>

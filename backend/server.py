@@ -17,8 +17,6 @@ import json
 import asyncio
 import httpx
 
-from anthropic import AsyncAnthropic
-
 from data_store import (
     SCHOLARSHIPS,
     TOP_COMPANIES,
@@ -42,11 +40,76 @@ MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 DEFAULT_PASSCODE = os.environ.get("DEFAULT_PASSCODE", "991285")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-AI_MODEL = "claude-sonnet-4-6"                  # Sonnet for all tasks (quality)
-AI_WEB_MODEL = "claude-sonnet-4-6"              # Required for web_search tool
-AI_FAST_MODEL = "claude-haiku-4-5-20251001"     # Haiku for quick generation (cities/travel, no web search)
+# ── Perplexity (Sonar) AI configuration ──────────────────────────────────────
+# All AI features were migrated from Anthropic (Claude) to Perplexity (Sonar).
+# Sonar models are web-grounded by default -- no separate "web_search" tool
+# needs to be attached, unlike the old Anthropic integration.
+# We accept PERPLEXITY_API_KEY as the primary env var, but fall back to
+# ANTHROPIC_API_KEY too in case the same Render env var slot was reused with a
+# new Perplexity key value instead of being renamed.
+PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
+PERPLEXITY_BASE_URL = "https://api.perplexity.ai"
+AI_MODEL = "sonar-pro"              # Production-quality, multi-source, web-grounded (all everyday tasks)
+AI_WEB_MODEL = "sonar-pro"          # Kept as an alias for code paths that used to force web search explicitly
+AI_FAST_MODEL = "sonar"             # Cheaper/faster web-grounded model (quick generation: cities/travel rotation)
+AI_DEEP_MODEL = "sonar-reasoning-pro"  # Chain-of-thought analytical model for comprehensive long-form content (full news narratives, stock analysis)
+
+
+async def call_perplexity(messages, model=AI_MODEL, max_tokens=2000, temperature=0.4,
+                           return_images=False, search_recency=None, timeout=60):
+    """Call the Perplexity Sonar chat-completions API directly over HTTP.
+
+    We use raw httpx (not the OpenAI SDK) so we have full access to
+    Perplexity-specific response fields like `images` and `citations`,
+    which aren't part of the standard OpenAI ChatCompletion schema.
+    Returns dict: {text, images, citations, raw}.
+    """
+    if not PERPLEXITY_API_KEY:
+        raise RuntimeError("PERPLEXITY_API_KEY not configured")
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if return_images:
+        payload["return_images"] = True
+    if search_recency:
+        payload["search_recency_filter"] = search_recency  # "day" | "week" | "month"
+    async with httpx.AsyncClient(timeout=timeout) as http_client:
+        resp = await http_client.post(
+            f"{PERPLEXITY_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    text = data["choices"][0]["message"]["content"]
+    images = data.get("images") or []
+    citations = data.get("citations") or []
+    return {"text": text, "images": images, "citations": citations, "raw": data}
+
+
+def extract_json_block(text: str):
+    """Strip markdown code fences and return the substring between the first
+    [ or { and its matching closing bracket, then json.loads it."""
+    text = text.strip()
+    if "```" in text:
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else text
+        if text.startswith("json"):
+            text = text[4:]
+    arr_start, obj_start = text.find("["), text.find("{")
+    if arr_start == -1 and obj_start == -1:
+        raise ValueError("No JSON found in AI response")
+    if arr_start != -1 and (obj_start == -1 or arr_start < obj_start):
+        start, end = arr_start, text.rfind("]")
+    else:
+        start, end = obj_start, text.rfind("}")
+    return json.loads(text[start:end + 1])
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY_PEM = os.environ.get("VAPID_PRIVATE_KEY_PEM", "").replace("\\n", "\n")
 VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "admin@onesmart.app")
@@ -504,7 +567,7 @@ async def cities_dynamic(refresh: int = 0, background_tasks: BackgroundTasks = N
     cached = await db.world_cache.find_one({"key": key}, {"_id": 0})
     if cached:
         return cached["data"]
-    if not ANTHROPIC_API_KEY:
+    if not PERPLEXITY_API_KEY:
         return {"items": []}
 
     pools = [
@@ -515,7 +578,7 @@ async def cities_dynamic(refresh: int = 0, background_tasks: BackgroundTasks = N
     ]
     chosen = pools[refresh % 4]
     try:
-        response = await anthropic_client.messages.create(
+        result = await call_perplexity(
             model=AI_FAST_MODEL, max_tokens=3000,
             messages=[{"role": "user", "content": (
                 f"Buat panduan relokasi untuk 4 kota ini (khusus profesional Indonesia): {chosen}. "
@@ -528,12 +591,7 @@ async def cities_dynamic(refresh: int = 0, background_tasks: BackgroundTasks = N
                 f"Bahasa Indonesia. JSON saja."
             )}],
         )
-        text = response.content[0].text
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"): text = text[4:]
-        start, end = text.find("["), text.rfind("]")
-        items = json.loads(text[start:end+1]) if start >= 0 else []
+        items = extract_json_block(result["text"])
         if not items:
             raise ValueError("empty")
     except Exception as e:
@@ -553,7 +611,7 @@ async def travel_dynamic(refresh: int = 0):
     cached = await db.world_cache.find_one({"key": key}, {"_id": 0})
     if cached:
         return cached["data"]
-    if not ANTHROPIC_API_KEY:
+    if not PERPLEXITY_API_KEY:
         return {"items": []}
 
     pools = [
@@ -564,7 +622,7 @@ async def travel_dynamic(refresh: int = 0):
     ]
     chosen = pools[refresh % 4]
     try:
-        response = await anthropic_client.messages.create(
+        result = await call_perplexity(
             model=AI_FAST_MODEL, max_tokens=3000,
             messages=[{"role": "user", "content": (
                 f"Buat panduan travel lengkap untuk 4 destinasi Indonesia ini: {chosen}. "
@@ -576,12 +634,7 @@ async def travel_dynamic(refresh: int = 0):
                 f"Bahasa Indonesia. JSON saja."
             )}],
         )
-        text = response.content[0].text
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"): text = text[4:]
-        start, end = text.find("["), text.rfind("]")
-        items = json.loads(text[start:end+1]) if start >= 0 else []
+        items = extract_json_block(result["text"])
         if not items:
             raise ValueError("empty")
     except Exception as e:
@@ -593,33 +646,52 @@ async def travel_dynamic(refresh: int = 0):
     return data
 
 
+JAKARTA_IMAGE_POOL = {
+    "Transportasi": "https://images.unsplash.com/photo-1610723384358-b8ee5892fb0f?w=900&q=80",
+    "Cuaca": "https://images.unsplash.com/photo-1601134467661-3d775b999c8b?w=900&q=80",
+    "Event": "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14?w=900&q=80",
+    "Hiburan": "https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?w=900&q=80",
+    "Kuliner": "https://images.unsplash.com/photo-1555126634-323283e090fa?w=900&q=80",
+    "Agenda Kota": "https://images.unsplash.com/photo-1555899434-94d1368aa7af?w=900&q=80",
+    "Kualitas Udara": "https://images.unsplash.com/photo-1590674899484-d5640e854abe?w=900&q=80",
+    "default": "https://images.unsplash.com/photo-1555899434-94d1368aa7af?w=900&q=80",
+}
+
+
 async def _refresh_jakarta_bg(daily_key: str):
     """Background task to refresh Jakarta data without blocking the response."""
     now = datetime.now(timezone.utc)
     try:
         today = now.strftime("%d %B %Y")
-        response = await anthropic_client.messages.create(
-            model=AI_WEB_MODEL,
-            max_tokens=1800,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        result = await call_perplexity(
+            model=AI_DEEP_MODEL,
+            max_tokens=4000,
+            return_images=True,
+            search_recency="week",
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari info Jakarta hari ini ({today}): event/hiburan 7 hari ke depan, "
-                    f"update MRT/LRT/busway, cuaca & kualitas udara, agenda kota, tips warga. "
+                    f"Cari SEMUA info penting Jakarta hari ini ({today}): event & hiburan 7 hari ke depan, "
+                    f"update MRT/LRT/TransJakarta/tol, cuaca & kualitas udara, agenda kota/pemprov, kuliner baru, "
+                    f"dan tips praktis warga. JANGAN batasi jumlah item — cakup selengkap dan sebanyak mungkin isu "
+                    f"aktual yang kamu temukan hari ini (idealnya 10-15 item, boleh lebih jika memang ada banyak berita relevan). "
+                    f"Untuk tiap item, tulis narasi 'summary' yang LENGKAP dan mendalam (minimal 4-6 kalimat, jangan disingkat), "
+                    f"jelaskan konteks, dampak ke warga, dan detail konkret (jam, lokasi, harga jika relevan). "
                     f"Output HANYA JSON array murni (tanpa markdown), format: "
                     f'[{{"emoji":"...","category":"...","title":"...","date":"...","location":"...","summary":"...","tip":"..."}}]. '
-                    f"Buat 6-8 item, emoji relevan. Bahasa Indonesia. JSON saja, tanpa penjelasan."
+                    f"Kategori salah satu dari: Transportasi, Cuaca, Event, Hiburan, Kuliner, Agenda Kota, Kualitas Udara. "
+                    f"Emoji relevan per item. Bahasa Indonesia. JSON saja, tanpa penjelasan di luar JSON."
                 ),
             }],
         )
-        text = "".join(b.text for b in response.content if hasattr(b, "text") and b.type == "text")
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"): text = text[4:]
-        start = text.find("[")
-        end = text.rfind("]")
-        items = json.loads(text[start:end+1]) if start >= 0 else []
+        items = extract_json_block(result["text"])
+        images = result.get("images") or []
+        for i, item in enumerate(items):
+            if images:
+                img = images[i % len(images)]
+                item["img"] = img.get("image_url") or img.get("url") if isinstance(img, dict) else img
+            if not item.get("img"):
+                item["img"] = JAKARTA_IMAGE_POOL.get(item.get("category"), JAKARTA_IMAGE_POOL["default"])
         if items:
             data = {"items": items, "updated_at": now_iso()}
             await db.world_cache.update_one(
@@ -644,24 +716,35 @@ async def jakarta_live(background_tasks: BackgroundTasks):
         if age < 21600:  # 6h
             return cached["data"]
         # Stale — return stale data NOW, refresh in background
-        if ANTHROPIC_API_KEY:
+        if PERPLEXITY_API_KEY:
             background_tasks.add_task(_refresh_jakarta_bg, daily_key)
         return cached["data"]
 
     # No cache at all — return static instantly, kick off background fetch
-    if ANTHROPIC_API_KEY:
+    if PERPLEXITY_API_KEY:
         background_tasks.add_task(_refresh_jakarta_bg, daily_key)
     return {"items": JAKARTA_AGENDA, "updated_at": now_iso(), "loading": True}
 
 
 NEWS_STATIC_FALLBACK = [
-    {"category":"Ekonomi","title":"Pasar Global Bergerak Mixed","summary":"Indeks saham global bergerak mixed jelang rilis data inflasi AS. Investor wait-and-see terkait arah kebijakan Fed dan sinyal pemangkasan suku bunga."},
-    {"category":"Indonesia","title":"Ekonomi Indonesia Tumbuh Stabil","summary":"Pemerintah optimis target pertumbuhan ekonomi 5.2% tercapai tahun ini. Ekspor nonmigas naik didorong komoditas nikel dan produk hilirisasi."},
-    {"category":"Pasar","title":"IHSG & Rupiah Dalam Sorotan","summary":"IHSG bergerak fluktuatif mengikuti sentimen global. Rupiah relatif stabil di kisaran Rp 16.000-an per dolar AS dengan intervensi BI yang terukur."},
-    {"category":"Teknologi","title":"AI Terus Berkembang Pesat","summary":"Rilis model AI terbaru dari perusahaan teknologi global mendominasi berita. Adopsi AI di sektor bisnis Indonesia terus meningkat, terutama fintech & e-commerce."},
-    {"category":"Sepak Bola","title":"Update Kompetisi Sepak Bola","summary":"Liga Champions, Premier League, dan Liga 1 Indonesia terus berlangsung seru. Timnas Indonesia melanjutkan persiapan untuk laga kualifikasi mendatang."},
-    {"category":"Geopolitik","title":"Dinamika Geopolitik Global","summary":"Ketegangan geopolitik di beberapa kawasan mempengaruhi harga energi dan rantai pasok global. Indonesia menjaga posisi netral dan fokus diplomasi ekonomi."},
+    {"category":"Ekonomi","title":"Pasar Global Bergerak Mixed","summary":"Indeks saham global bergerak mixed jelang rilis data inflasi AS. Investor wait-and-see terkait arah kebijakan Fed dan sinyal pemangkasan suku bunga. Pergerakan ini turut memengaruhi sentimen pasar Asia, termasuk Indonesia, karena investor global biasanya menyesuaikan portofolio menjelang keputusan penting bank sentral AS.","img":"https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=900&q=80"},
+    {"category":"Indonesia","title":"Ekonomi Indonesia Tumbuh Stabil","summary":"Pemerintah optimis target pertumbuhan ekonomi 5.2% tercapai tahun ini. Ekspor nonmigas naik didorong komoditas nikel dan produk hilirisasi. Sektor manufaktur dan konsumsi rumah tangga juga menunjukkan penguatan, meski tekanan dari suku bunga tinggi dan pelemahan permintaan global masih perlu diwaspadai pemerintah dan pelaku usaha.","img":"https://images.unsplash.com/photo-1555529771-7888783a18d3?w=900&q=80"},
+    {"category":"Pasar","title":"IHSG & Rupiah Dalam Sorotan","summary":"IHSG bergerak fluktuatif mengikuti sentimen global. Rupiah relatif stabil di kisaran Rp 16.000-an per dolar AS dengan intervensi BI yang terukur. Investor asing maupun domestik mencermati arah kebijakan suku bunga acuan serta perkembangan harga komoditas ekspor unggulan sebagai penentu arah pasar dalam beberapa pekan ke depan.","img":"https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=900&q=80"},
+    {"category":"Teknologi","title":"AI Terus Berkembang Pesat","summary":"Rilis model AI terbaru dari perusahaan teknologi global mendominasi berita. Adopsi AI di sektor bisnis Indonesia terus meningkat, terutama fintech & e-commerce. Perusahaan rintisan lokal mulai mengintegrasikan AI generatif untuk layanan pelanggan, analitik risiko kredit, dan otomatisasi operasional guna bersaing di pasar digital yang makin ketat.","img":"https://images.unsplash.com/photo-1677442136019-21780ecad995?w=900&q=80"},
+    {"category":"Sepak Bola","title":"Update Kompetisi Sepak Bola","summary":"Liga Champions, Premier League, dan Liga 1 Indonesia terus berlangsung seru. Timnas Indonesia melanjutkan persiapan untuk laga kualifikasi mendatang. Pelatih menekankan pentingnya konsistensi performa pemain di klub masing-masing sebagai modal utama menghadapi jadwal internasional yang padat dalam waktu dekat.","img":"https://images.unsplash.com/photo-1522778119026-d647f0596c20?w=900&q=80"},
+    {"category":"Geopolitik","title":"Dinamika Geopolitik Global","summary":"Ketegangan geopolitik di beberapa kawasan mempengaruhi harga energi dan rantai pasok global. Indonesia menjaga posisi netral dan fokus diplomasi ekonomi. Pemerintah terus memperkuat hubungan dagang dengan mitra strategis untuk menjaga ketahanan pangan dan energi nasional di tengah ketidakpastian geopolitik yang berkepanjangan.","img":"https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=900&q=80"},
 ]
+
+NEWS_IMAGE_POOL = {
+    "Ekonomi": "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=900&q=80",
+    "Indonesia": "https://images.unsplash.com/photo-1555529771-7888783a18d3?w=900&q=80",
+    "Pasar": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=900&q=80",
+    "Teknologi": "https://images.unsplash.com/photo-1677442136019-21780ecad995?w=900&q=80",
+    "Sepak Bola": "https://images.unsplash.com/photo-1522778119026-d647f0596c20?w=900&q=80",
+    "Olahraga": "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=900&q=80",
+    "Geopolitik": "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=900&q=80",
+    "default": "https://images.unsplash.com/photo-1495020689067-958852a7765e?w=900&q=80",
+}
 
 
 async def _refresh_news_bg(daily_key: str):
@@ -669,29 +752,38 @@ async def _refresh_news_bg(daily_key: str):
     now = datetime.now(timezone.utc)
     try:
         today = now.strftime("%d %B %Y")
-        response = await anthropic_client.messages.create(
-            model=AI_WEB_MODEL,
-            max_tokens=2500,
-            tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        result = await call_perplexity(
+            model=AI_DEEP_MODEL,
+            max_tokens=6000,
+            return_images=True,
+            search_recency="day",
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari 8 berita terkini paling penting hari ini ({today}) untuk pembaca Indonesia muda, "
-                    f"wajib mencakup: 2 ekonomi (global & Indonesia), 1 geopolitik, 1 teknologi/AI, "
-                    f"1 pasar finansial (IHSG/saham/kripto), 2 sepak bola/olahraga (Liga Champions/Premier League/Liga 1/Timnas), "
-                    f"1 berita Indonesia. Tiap berita: kategori, judul menarik, ringkasan 2-3 kalimat faktual. "
-                    f"Output HANYA JSON array murni: "
+                    f"Cari berita terkini paling penting hari ini ({today}) untuk pembaca Indonesia muda. "
+                    f"JANGAN batasi jumlah berita ke angka kecil — cakup selengkap dan sebanyak mungkin berita "
+                    f"penting hari ini (idealnya 12-18 item, boleh lebih jika memang banyak berita besar hari ini), "
+                    f"dengan proporsi mencakup: ekonomi global & Indonesia, geopolitik, teknologi/AI, "
+                    f"pasar finansial (IHSG/saham/kripto/rupiah), sepak bola & olahraga (Liga Champions/Premier League/Liga 1/Timnas), "
+                    f"dan berita nasional Indonesia lainnya yang relevan. "
+                    f"Untuk tiap berita, tulis 'summary' sebagai narasi LENGKAP dan mendalam (minimal 5-7 kalimat, "
+                    f"JANGAN disingkat atau dipendekkan) yang menjelaskan duduk perkara, latar belakang, dampak "
+                    f"bagi Indonesia/investor/pembaca, dan data konkret (angka, tanggal, nama pihak terkait) bila tersedia. "
+                    f"Output HANYA JSON array murni (tanpa markdown fences): "
                     f'[{{"category":"...","title":"...","summary":"..."}}]. '
-                    f"Kategori: Ekonomi, Geopolitik, Teknologi, Pasar, Sepak Bola, Olahraga, Indonesia. Bahasa Indonesia. JSON saja."
+                    f"Kategori salah satu dari: Ekonomi, Geopolitik, Teknologi, Pasar, Sepak Bola, Olahraga, Indonesia. "
+                    f"Bahasa Indonesia. JSON saja, tanpa penjelasan di luar JSON."
                 ),
             }],
         )
-        text = "".join(b.text for b in response.content if hasattr(b, "text") and b.type == "text")
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"): text = text[4:]
-        start, end = text.find("["), text.rfind("]")
-        items = json.loads(text[start:end+1]) if start >= 0 else []
+        items = extract_json_block(result["text"])
+        images = result.get("images") or []
+        for i, item in enumerate(items):
+            if images:
+                img = images[i % len(images)]
+                item["img"] = (img.get("image_url") or img.get("url")) if isinstance(img, dict) else img
+            if not item.get("img"):
+                item["img"] = NEWS_IMAGE_POOL.get(item.get("category"), NEWS_IMAGE_POOL["default"])
         if items:
             data = {"items": items, "updated_at": now_iso()}
             await db.world_cache.update_one(
@@ -714,7 +806,7 @@ async def world_news(background_tasks: BackgroundTasks):
         age = (now - datetime.fromisoformat(cached["cached_at"])).total_seconds()
         if age < 3600:  # fresh within 1h
             return cached["data"]
-        if ANTHROPIC_API_KEY:
+        if PERPLEXITY_API_KEY:
             background_tasks.add_task(_refresh_news_bg, daily_key)
         return cached["data"]  # stale but instant
 
@@ -723,7 +815,7 @@ async def world_news(background_tasks: BackgroundTasks):
         {"key": {"$regex": "^news-" + now.strftime("%Y-%m-%d")}},
         {"_id": 0}, sort=[("cached_at", -1)],
     )
-    if ANTHROPIC_API_KEY:
+    if PERPLEXITY_API_KEY:
         background_tasks.add_task(_refresh_news_bg, daily_key)
     if recent:
         return recent["data"]
@@ -731,7 +823,7 @@ async def world_news(background_tasks: BackgroundTasks):
     return {"items": NEWS_STATIC_FALLBACK, "updated_at": now_iso(), "loading": True}
 
 
-# ============== AI INSIGHT (Claude Sonnet 4.5) ==============
+# ============== AI INSIGHT (Perplexity Sonar) ==============
 INSIGHT_PROMPTS = {
     "scholarship": "Anda mentor beasiswa S2 berpengalaman 15+ tahun. Berikan tips & trick KONKRET untuk lolos beasiswa ini berdasarkan data: {context}. Fokus: essay, interview, portfolio, timeline. Output dalam markdown bullet. Maksimal 6 poin actionable, masing-masing 1-2 kalimat. Bahasa: {language}.",
     "salary": "Anda career coach global tech. Berdasarkan data perusahaan: {context}, berikan: (1) Estimasi salary range untuk role utama (entry/mid/senior) dalam USD; (2) 4 tips konkret membangun portofolio yang menarik untuk perusahaan ini. Markdown ringkas. Bahasa: {language}.",
@@ -773,7 +865,7 @@ WEB_SEARCH_TOPICS = {"stock", "investment_strategy", "general"}
 async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     """Generate AI insight. Stock/investment topics use web search for real-time data.
     Cache is date-keyed for stock topics (expires daily)."""
-    if not ANTHROPIC_API_KEY:
+    if not PERPLEXITY_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     today = datetime.now(timezone.utc).strftime("%d %B %Y")  # e.g. "26 June 2026"
@@ -802,23 +894,19 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     )
 
     try:
-        # Use web search for stock/investment topics
-        create_kwargs = dict(
-            model=AI_MODEL,
+        # Sonar models are web-grounded by default; use the deep reasoning model
+        # for topics that need current-data synthesis (stock/investment/general).
+        model = AI_DEEP_MODEL if req.topic in WEB_SEARCH_TOPICS else AI_MODEL
+        result = await call_perplexity(
+            model=model,
             max_tokens=2500,
-            system=system_msg,
-            messages=[{"role": "user", "content": prompt}],
+            search_recency="week" if req.topic in WEB_SEARCH_TOPICS else None,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt},
+            ],
         )
-        if req.topic in WEB_SEARCH_TOPICS:
-            create_kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
-        create_kwargs["model"] = AI_WEB_MODEL  # web_search requires Sonnet+
-
-        response = await anthropic_client.messages.create(**create_kwargs)
-
-        # Extract text from response (may include web search tool use blocks)
-        insight_text = "".join(
-            b.text for b in response.content if hasattr(b, "text") and b.type == "text"
-        )
+        insight_text = result["text"]
         if not insight_text:
             raise ValueError("Empty response from AI")
     except Exception as e:
@@ -840,7 +928,7 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
 @api.post("/ai/chat")
 async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
     """Interactive financial/career advisor chat. Maintains conversation context."""
-    if not ANTHROPIC_API_KEY:
+    if not PERPLEXITY_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
@@ -854,12 +942,10 @@ async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
         + (f"Konteks pasar saat ini: {ctx_str}. " if ctx_str else "")
         + f"Jawab dalam {lang_label}. Gunakan markdown untuk struktur."
     )
-    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+    msgs = [{"role": "system", "content": system_msg}] + [{"role": m.role, "content": m.content} for m in req.messages]
     try:
-        response = await anthropic_client.messages.create(
-            model=AI_MODEL, max_tokens=1500, system=system_msg, messages=msgs,
-        )
-        reply = response.content[0].text
+        result = await call_perplexity(model=AI_MODEL, max_tokens=1500, messages=msgs)
+        reply = result["text"]
     except Exception as e:
         logger.exception("AI chat failed")
         raise HTTPException(500, f"AI error: {e}")
@@ -869,7 +955,7 @@ async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
 @api.post("/ai/life-goal-chat")
 async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
     """Life Goal Assistant — holistic life coach for Indonesian millennials."""
-    if not ANTHROPIC_API_KEY:
+    if not PERPLEXITY_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
@@ -894,12 +980,10 @@ async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
         f"Ingat: kamu bukan robot yang memberikan template jawaban. Kamu adalah teman cerdas yang benar-benar "
         f"mendengarkan dan membantu pengguna menemukan jawaban terbaik untuk situasi MEREKA."
     )
-    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+    msgs = [{"role": "system", "content": system_msg}] + [{"role": m.role, "content": m.content} for m in req.messages]
     try:
-        response = await anthropic_client.messages.create(
-            model=AI_MODEL, max_tokens=2000, system=system_msg, messages=msgs,
-        )
-        reply = response.content[0].text
+        result = await call_perplexity(model=AI_MODEL, max_tokens=2000, messages=msgs)
+        reply = result["text"]
     except Exception as e:
         logger.exception("Life goal chat failed")
         raise HTTPException(500, f"AI error: {e}")
@@ -909,7 +993,7 @@ async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
 @api.post("/ai/investment-simulator")
 async def investment_simulator(req: SimulatorReq, user: dict = Depends(get_user)):
     """AI-powered investment simulator: given capital, risk profile & horizon → optimal allocation + projections."""
-    if not ANTHROPIC_API_KEY:
+    if not PERPLEXITY_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
@@ -938,15 +1022,12 @@ async def investment_simulator(req: SimulatorReq, user: dict = Depends(get_user)
         f"Output ONLY valid JSON. Bahasa: {lang_label}."
     )
     try:
-        response = await anthropic_client.messages.create(
-            model=AI_MODEL, max_tokens=2000,
+        ai_result = await call_perplexity(
+            model=AI_DEEP_MODEL, max_tokens=2500,
+            search_recency="week",
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text.strip()
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"): text = text[4:]
-        result = json.loads(text.strip())
+        result = extract_json_block(ai_result["text"])
     except json.JSONDecodeError as e:
         raise HTTPException(500, f"AI returned invalid JSON: {e}")
     except Exception as e:
@@ -1172,11 +1253,11 @@ def _build_cv_pdf(data: dict, ai_bullets: dict) -> bytes:
 
 @api.post("/cv/generate")
 async def cv_generate(req: CVRequest, user: dict = Depends(get_user)):
-    """Generate an ATS-optimized CV PDF. Uses Claude to enrich summary, action-verb experience bullets and optimization tips."""
+    """Generate an ATS-optimized CV PDF. Uses Perplexity to enrich summary, action-verb experience bullets and optimization tips."""
     from fastapi.responses import Response
 
     ai_bullets = {"experiences": {}, "tips": [], "summary": None}
-    if ANTHROPIC_API_KEY:
+    if PERPLEXITY_API_KEY:
         lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
         prompt = (
             "Anda adalah CV writer profesional ATS-optimized. Berdasarkan data berikut:\n"
@@ -1195,19 +1276,15 @@ async def cv_generate(req: CVRequest, user: dict = Depends(get_user)):
             f"Bahasa: {lang_label}. Output STRICT JSON only."
         )
         try:
-            response = await anthropic_client.messages.create(
+            ai_result = await call_perplexity(
                 model=AI_MODEL,
                 max_tokens=1500,
-                system="You output strict JSON only.",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": "You output strict JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
             )
-            text = response.content[0].text
-            # strip code fences if any
-            if "```" in text:
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-            parsed = json.loads(text.strip())
+            parsed = extract_json_block(ai_result["text"])
             ai_bullets["summary"] = parsed.get("summary")
             ai_bullets["experiences"] = parsed.get("experiences", {}) or {}
             ai_bullets["tips"] = parsed.get("tips", []) or []
@@ -1319,12 +1396,17 @@ async def root():
 
 @api.get("/debug/ai")
 async def debug_ai():
-    info = {"key_set": bool(ANTHROPIC_API_KEY), "key_prefix": ANTHROPIC_API_KEY[:12] + "..." if ANTHROPIC_API_KEY else None, "model": AI_MODEL}
-    if anthropic_client:
+    info = {
+        "provider": "perplexity",
+        "key_set": bool(PERPLEXITY_API_KEY),
+        "key_prefix": PERPLEXITY_API_KEY[:8] + "..." if PERPLEXITY_API_KEY else None,
+        "model": AI_MODEL,
+    }
+    if PERPLEXITY_API_KEY:
         try:
-            r = await anthropic_client.messages.create(model=AI_MODEL, max_tokens=50, messages=[{"role": "user", "content": "Say OK"}])
+            r = await call_perplexity(model=AI_MODEL, max_tokens=50, messages=[{"role": "user", "content": "Say OK"}])
             info["test_call"] = "success"
-            info["response"] = r.content[0].text
+            info["response"] = r["text"]
         except Exception as e:
             info["test_call"] = "failed"
             info["error"] = str(e)

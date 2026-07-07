@@ -18,6 +18,13 @@ const catColor = {
   Indonesia:"bg-red-50 text-red-700",
   "Sepak Bola":"bg-green-50 text-green-700",
   Olahraga:"bg-green-50 text-green-700",
+  Transportasi:"bg-blue-50 text-blue-700",
+  Cuaca:"bg-sky-50 text-sky-700",
+  Event:"bg-purple-50 text-purple-700",
+  Hiburan:"bg-pink-50 text-pink-700",
+  Kuliner:"bg-orange-50 text-orange-700",
+  "Agenda Kota":"bg-slate-100 text-slate-600",
+  "Kualitas Udara":"bg-teal-50 text-teal-700",
 };
 
 // ── OWID data with richer context ────────────────────────────────────────────
@@ -227,8 +234,8 @@ export default function World() {
         {/* NEWS */}
         <TabsContent value="news" className="mt-5">
           {newsLoading ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {[1,2,3,4].map(i=><div key={i} className="h-48 rounded-2xl bg-slate-100 animate-pulse"/>)}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {[1,2,3,4].map(i=><div key={i} className="h-[420px] rounded-2xl bg-slate-100 animate-pulse"/>)}
             </div>
           ) : news.length === 0 ? (
             <div className="text-center py-12 text-slate-500">
@@ -236,18 +243,33 @@ export default function World() {
               <p>{lang==="id"?"Gagal memuat berita. Coba refresh.":"Failed to load news. Try refreshing."}</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {news.map((n,i)=>(
-                <article key={i} className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm hover:shadow-md transition-shadow">
-                  <span className={`text-[11px] px-2.5 py-1 rounded-full font-medium ${catColor[n.category]||"bg-slate-100 text-slate-600"}`}>{n.category}</span>
-                  <h3 className="font-bold text-slate-800 mt-3 leading-snug">{n.title}</h3>
-                  <p className="text-sm text-slate-600 mt-2 leading-relaxed">{n.summary}</p>
-                  <div className="mt-4">
-                    <AIInsightButton topic="general" context={{headline:n.title, summary:n.summary, ask:"Analisa mendalam: dampak ke investor Indonesia, peluang & risiko yang perlu diwaspadai."}} testId={`ai-news-${i}`}/>
-                  </div>
-                </article>
-              ))}
-            </div>
+            <>
+              <p className="text-xs text-slate-400 mb-4">{news.length} {lang==="id"?"berita hari ini":"stories today"}</p>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {news.map((n,i)=>(
+                  <article key={i} className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                    {/* IG-style hero image with gradient overlay + category/title */}
+                    <div className="relative h-52 bg-gradient-to-br from-slate-200 to-slate-100">
+                      {n.img && (
+                        <img src={n.img} alt={n.title} className="w-full h-full object-cover absolute inset-0"
+                             onError={e=>{e.target.style.display="none"}}/>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent"/>
+                      <div className="absolute bottom-3 left-4 right-4">
+                        <span className={`text-[11px] px-2.5 py-1 rounded-full font-semibold backdrop-blur-sm ${catColor[n.category]||"bg-white/80 text-slate-700"}`}>{n.category}</span>
+                        <h3 className="text-white font-bold text-lg mt-2 leading-snug drop-shadow">{n.title}</h3>
+                      </div>
+                    </div>
+                    <div className="p-5">
+                      <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">{n.summary}</p>
+                      <div className="mt-4">
+                        <AIInsightButton topic="general" context={{headline:n.title, summary:n.summary, ask:"Analisa mendalam: dampak ke investor Indonesia, peluang & risiko yang perlu diwaspadai."}} testId={`ai-news-${i}`}/>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </>
           )}
         </TabsContent>
 
@@ -435,20 +457,27 @@ export default function World() {
             </div>
           ) : (
             <div>
-              <div className="space-y-3">
+              <p className="text-xs text-slate-400 mb-3">{jakarta.length} {lang==="id"?"info hari ini":"updates today"}</p>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                 {jakarta.map((j,i)=>(
-                  <article key={i} className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm">
-                    <div className="flex items-start gap-3">
-                      <div className="text-2xl flex-shrink-0">{j.emoji || "📌"}</div>
-                      <div className="flex-1">
-                        <div className="flex items-start justify-between gap-2 flex-wrap">
-                          <h3 className="font-bold text-slate-800">{j.title}</h3>
-                          {j.category && <span className={`text-[11px] px-2 py-0.5 rounded-full ${catColor[j.category]||"bg-slate-100 text-slate-500"}`}>{j.category}</span>}
-                        </div>
-                        {j.date && <div className="text-xs text-slate-400 mt-0.5">📅 {j.date} {j.location && `· 📍 ${j.location}`}</div>}
-                        <p className="text-sm text-slate-600 mt-1.5 leading-relaxed">{j.summary || j.description}</p>
-                        {j.tip && <div className="mt-2 text-xs bg-amber-50 text-amber-700 px-3 py-1.5 rounded-lg">💡 {j.tip}</div>}
+                  <article key={i} className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                    {/* IG-style hero image with gradient overlay + category/title */}
+                    <div className="relative h-48 bg-gradient-to-br from-slate-200 to-slate-100">
+                      {j.img && (
+                        <img src={j.img} alt={j.title} className="w-full h-full object-cover absolute inset-0"
+                             onError={e=>{e.target.style.display="none"}}/>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent"/>
+                      <div className="absolute top-3 left-3 text-2xl drop-shadow">{j.emoji || "📌"}</div>
+                      <div className="absolute bottom-3 left-4 right-4">
+                        {j.category && <span className={`text-[11px] px-2.5 py-1 rounded-full font-semibold backdrop-blur-sm ${catColor[j.category]||"bg-white/80 text-slate-700"}`}>{j.category}</span>}
+                        <h3 className="text-white font-bold text-lg mt-2 leading-snug drop-shadow">{j.title}</h3>
+                        {j.date && <div className="text-white/85 text-xs mt-1 drop-shadow">📅 {j.date} {j.location && `· 📍 ${j.location}`}</div>}
                       </div>
+                    </div>
+                    <div className="p-5">
+                      <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">{j.summary || j.description}</p>
+                      {j.tip && <div className="mt-3 text-xs bg-amber-50 text-amber-700 px-3 py-2 rounded-lg">💡 {j.tip}</div>}
                     </div>
                   </article>
                 ))}

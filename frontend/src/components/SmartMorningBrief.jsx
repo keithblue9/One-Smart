@@ -166,7 +166,7 @@ export default function SmartMorningBrief({ market }) {
             <div className="px-6 pb-5 flex items-center justify-between">
               <span className="text-[11px] text-ink-muted flex items-center gap-1">
                 <Sparkle size={11} weight="fill" className="text-[#B76E38]" />
-                Powered by Claude
+                Powered by Perplexity
               </span>
               <button
                 onClick={fetchBrief}
