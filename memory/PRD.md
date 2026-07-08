@@ -55,6 +55,13 @@ PWA bernama "One Smart" — login 6 digit passcode (default 991285, bisa diganti
 - [x] Friendlier AI Insight error state (AIInsightButton.jsx): shows a plain-language message + a "Coba Lagi" retry button instead of a raw backend error string.
 - [x] Verified with a full clean `npm run build` (Compiled successfully, 0 errors) plus targeted backend tests reproducing the exact empty-content bug and confirming the fallback recovers automatically.
 
+### Phase 5 (v1.4, Jul 2026) — "News stays static" root cause fix
+- [x] **Root cause**: the background refresh for news/jakarta was failing *silently* every time (error only went to logs), so the MongoDB `world_cache` was never populated and every request kept serving the static fallback + polling forever. Two culprits: (1) fragile JSON extraction — Perplexity Sonar peppers responses with citation markers like `[1]`/`[2]` and sometimes prose preamble, and the old `find("[")`-based parser grabbed a citation bracket instead of the real JSON array and threw; (2) `return_images`/`search_recency_filter` can be rejected (HTTP 4xx) by some Perplexity account tiers, and the retry didn't strip *both* optional params.
+- [x] Rewrote `extract_json_block()` to be bulletproof: strips ```fences``` and `<think>` tags, then bracket-balances every `[`/`{` candidate and returns the earliest *meaningful* container (dict, or list-containing-dicts), skipping scalar citation arrays and nested arrays. Unit-tested against 11 real-world Sonar output shapes.
+- [x] `call_perplexity()` now progressively strips optional params on 4xx (images → recency → bare) and fails fast on 401/403 (auth). It also surfaces Perplexity's actual error body in the exception message.
+- [x] `/world/news` and `/world/jakarta-live` now do a **bounded (25s) synchronous** fetch on first-ever load, so the first visitor gets real data instead of being stuck on static if background tasks fail; slow/failed sync still falls back to static + background poll.
+- [x] New diagnostics: `GET /api/debug/news-raw` (runs the real news call synchronously, returns Perplexity's raw text + parse result + actual error), `POST /api/debug/refresh-world` (force-refresh news+jakarta, report item counts), `DELETE /api/debug/clear-world-cache` (wipe cache to force regen). `GET /api/debug/ai` now also reports whether the key looks like a `pplx-` key.
+
 ## Backlog
 - [ ] Stock data live (Alpha Vantage / Yahoo Finance) — currently curated, AI insight is real
 - [ ] Scraping ourworldindata real-time chart embeds

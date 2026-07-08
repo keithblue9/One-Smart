@@ -89,7 +89,7 @@ async def call_perplexity(messages, model=AI_MODEL, max_tokens=3000, temperature
     if fallback_model == "auto":
         fallback_model = _auto_fallback(model)
 
-    async def _once(m: str, with_images: bool):
+    async def _once(m: str, with_images: bool, with_recency: bool):
         payload = {
             "model": m,
             "messages": messages,
@@ -98,7 +98,7 @@ async def call_perplexity(messages, model=AI_MODEL, max_tokens=3000, temperature
         }
         if with_images:
             payload["return_images"] = True
-        if search_recency:
+        if with_recency and search_recency:
             payload["search_recency_filter"] = search_recency  # "day" | "week" | "month"
         async with httpx.AsyncClient(timeout=timeout) as http_client:
             resp = await http_client.post(
@@ -109,35 +109,48 @@ async def call_perplexity(messages, model=AI_MODEL, max_tokens=3000, temperature
                 },
                 json=payload,
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # Surface Perplexity's actual error body (invaluable for debugging).
+                body = resp.text[:500]
+                raise httpx.HTTPStatusError(
+                    f"HTTP {resp.status_code} from Perplexity: {body}",
+                    request=resp.request, response=resp,
+                )
             data = resp.json()
         text = data["choices"][0]["message"]["content"]
         images = data.get("images") or []
         citations = data.get("citations") or []
         return text, images, citations, data
 
-    # Attempt 1: as requested.
-    try:
-        text, images, citations, raw = await _once(model, return_images)
-    except httpx.HTTPStatusError as e:
-        if return_images:
-            # Some account tiers reject return_images with a 4xx — retry without it
-            # instead of failing the whole request.
-            logger.warning("Perplexity return_images rejected (%s), retrying without it", e)
-            text, images, citations, raw = await _once(model, False)
-        else:
-            raise
+    async def _try_model(m: str):
+        """Try a model, progressively dropping optional params on 4xx."""
+        attempts = [(return_images, True), (False, True), (False, False)]
+        # de-dupe while preserving order
+        seen, ordered = set(), []
+        for a in attempts:
+            if a not in seen:
+                seen.add(a); ordered.append(a)
+        last_err = None
+        for with_images, with_recency in ordered:
+            try:
+                return await _once(m, with_images, with_recency)
+            except httpx.HTTPStatusError as e:
+                last_err = e
+                # 401/403 (auth) won't be fixed by dropping params — fail fast.
+                if e.response is not None and e.response.status_code in (401, 403):
+                    raise
+                logger.warning("Perplexity call failed (images=%s recency=%s): %s — trying leaner params",
+                               with_images, with_recency, e)
+                continue
+        raise last_err
 
-    # Attempt 2: primary model returned nothing usable -> try fallback model.
+    # Attempt with primary model.
+    text, images, citations, raw = await _try_model(model)
+
+    # If primary returned empty content, try the fallback model.
     if (not text or not str(text).strip()) and fallback_model and fallback_model != model:
         logger.warning("Perplexity model %s returned empty content, retrying with %s", model, fallback_model)
-        try:
-            text, images, citations, raw = await _once(fallback_model, return_images)
-        except httpx.HTTPStatusError as e:
-            if return_images:
-                text, images, citations, raw = await _once(fallback_model, False)
-            else:
-                raise
+        text, images, citations, raw = await _try_model(fallback_model)
 
     if not text or not str(text).strip():
         raise RuntimeError(
@@ -148,22 +161,89 @@ async def call_perplexity(messages, model=AI_MODEL, max_tokens=3000, temperature
 
 
 def extract_json_block(text: str):
-    """Strip markdown code fences and return the substring between the first
-    [ or { and its matching closing bracket, then json.loads it."""
-    text = text.strip()
+    """Robustly extract the first valid JSON array/object from an LLM response.
+
+    Handles all the ways Perplexity Sonar wraps output in practice:
+    - markdown ```json fences
+    - <think>...</think> reasoning tags (stripped)
+    - inline citation markers like [1], [2] in prose BEFORE the real array
+      (naive find("[") would grab the citation bracket and fail to parse)
+    - leading/trailing prose around the JSON
+
+    Strategy: strip fences/think-tags, then scan every '[' and '{' position and
+    attempt a bracket-balanced extraction + json.loads, returning the first that
+    parses. This is resilient to citation brackets and preamble text.
+    """
+    import re
+    if not text or not str(text).strip():
+        raise ValueError("Empty AI response")
+    text = str(text).strip()
+
+    # Remove <think>...</think> blocks some models emit
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+    # Prefer fenced content if present
     if "```" in text:
-        parts = text.split("```")
-        text = parts[1] if len(parts) > 1 else text
-        if text.startswith("json"):
-            text = text[4:]
-    arr_start, obj_start = text.find("["), text.find("{")
-    if arr_start == -1 and obj_start == -1:
-        raise ValueError("No JSON found in AI response")
-    if arr_start != -1 and (obj_start == -1 or arr_start < obj_start):
-        start, end = arr_start, text.rfind("]")
-    else:
-        start, end = obj_start, text.rfind("}")
-    return json.loads(text[start:end + 1])
+        m = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL)
+        if m:
+            text = m.group(1).strip()
+
+    def _balanced_slice(s: str, start: int, open_ch: str, close_ch: str):
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(s)):
+            ch = s[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return s[start:i + 1]
+        return None
+
+    # Try each candidate opening bracket, collect all that parse into a
+    # container. A "meaningful" container is a dict or a list that contains at
+    # least one dict (real data). Among meaningful ones, prefer the EARLIEST /
+    # OUTERMOST (a nested array inside an object must not beat the outer object;
+    # a leading citation marker like `[1]` is not meaningful and is skipped).
+    candidates = sorted(
+        [(i, "[", "]") for i, c in enumerate(text) if c == "["]
+        + [(i, "{", "}") for i, c in enumerate(text) if c == "{"]
+    )
+    meaningful = None
+    scalar_fallback = None
+    for start, open_ch, close_ch in candidates:
+        sliced = _balanced_slice(text, start, open_ch, close_ch)
+        if not sliced:
+            continue
+        try:
+            parsed = json.loads(sliced)
+        except json.JSONDecodeError:
+            continue
+        is_meaningful = isinstance(parsed, dict) or (
+            isinstance(parsed, list) and any(isinstance(el, dict) for el in parsed)
+        )
+        if is_meaningful:
+            meaningful = parsed  # earliest wins (candidates are position-sorted)
+            break
+        if scalar_fallback is None and isinstance(parsed, (list, dict)):
+            scalar_fallback = parsed
+
+    if meaningful is not None:
+        return meaningful
+    if scalar_fallback is not None:
+        return scalar_fallback
+
+    raise ValueError("No parseable JSON container found in AI response")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_PRIVATE_KEY_PEM = os.environ.get("VAPID_PRIVATE_KEY_PEM", "").replace("\\n", "\n")
 VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "admin@onesmart.app")
@@ -806,8 +886,16 @@ async def jakarta_live(background_tasks: BackgroundTasks):
             background_tasks.add_task(_refresh_jakarta_bg, daily_key)
         return cached["data"]
 
-    # No cache at all — return static instantly, kick off background fetch
+    # No cache at all — attempt a bounded synchronous fetch so the first visitor
+    # gets real data; fall back to (date-filtered) static + background if slow.
     if PERPLEXITY_API_KEY:
+        try:
+            await asyncio.wait_for(_refresh_jakarta_bg(daily_key), timeout=25)
+            fresh = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
+            if fresh:
+                return fresh["data"]
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning("Sync jakarta first-load failed/slow (%s), serving static + bg", e)
         background_tasks.add_task(_refresh_jakarta_bg, daily_key)
     return {"items": _filter_upcoming(JAKARTA_AGENDA, date_field="date", grace_days=1), "updated_at": now_iso(), "loading": True}
 
@@ -907,11 +995,25 @@ async def world_news(background_tasks: BackgroundTasks):
         {"key": {"$regex": "^news-" + now.strftime("%Y-%m-%d")}},
         {"_id": 0}, sort=[("cached_at", -1)],
     )
-    if PERPLEXITY_API_KEY:
-        background_tasks.add_task(_refresh_news_bg, daily_key)
     if recent:
+        # Serve earlier-today cache instantly, refresh this hour's bucket in bg.
+        if PERPLEXITY_API_KEY:
+            background_tasks.add_task(_refresh_news_bg, daily_key)
         return recent["data"]
-    # First-ever load — static instant, background will populate
+
+    # First-ever load with no cache anywhere. Try a bounded SYNCHRONOUS refresh so
+    # the very first visitor gets real news instead of being stuck on static
+    # forever if background tasks silently fail. If it's too slow, fall back to
+    # static + background and let the frontend poll.
+    if PERPLEXITY_API_KEY:
+        try:
+            await asyncio.wait_for(_refresh_news_bg(daily_key), timeout=25)
+            fresh = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
+            if fresh:
+                return fresh["data"]
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning("Sync news first-load failed/slow (%s), serving static + bg", e)
+        background_tasks.add_task(_refresh_news_bg, daily_key)
     return {"items": NEWS_STATIC_FALLBACK, "updated_at": now_iso(), "loading": True}
 
 
@@ -1493,6 +1595,7 @@ async def debug_ai():
         "provider": "perplexity",
         "key_set": bool(PERPLEXITY_API_KEY),
         "key_prefix": PERPLEXITY_API_KEY[:8] + "..." if PERPLEXITY_API_KEY else None,
+        "key_looks_like_perplexity": PERPLEXITY_API_KEY.startswith("pplx-") if PERPLEXITY_API_KEY else False,
         "model": AI_MODEL,
     }
     if PERPLEXITY_API_KEY:
@@ -1502,8 +1605,75 @@ async def debug_ai():
             info["response"] = r["text"]
         except Exception as e:
             info["test_call"] = "failed"
-            info["error"] = str(e)
+            info["error"] = f"{type(e).__name__}: {e}"
     return info
+
+
+@api.get("/debug/news-raw")
+async def debug_news_raw():
+    """Run the EXACT news-generation call synchronously and surface the real
+    Perplexity response/error. Use this to diagnose why /world/news stays static:
+    if this returns an error, that error is why the background refresh silently fails."""
+    if not PERPLEXITY_API_KEY:
+        return {"ok": False, "error": "PERPLEXITY_API_KEY not configured"}
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%d %B %Y")
+    steps = {}
+    # Step 1: try WITH images + recency (the production config)
+    try:
+        result = await call_perplexity(
+            model=AI_DEEP_MODEL, max_tokens=8000, return_images=True, search_recency="day",
+            messages=[{"role": "user", "content": (
+                f"Cari 5 berita penting hari ini ({today}). Output HANYA JSON array: "
+                f'[{{"category":"...","title":"...","summary":"..."}}]. Bahasa Indonesia. JSON saja.'
+            )}],
+        )
+        steps["call"] = "success"
+        steps["raw_text_preview"] = (result["text"] or "")[:800]
+        steps["num_images_returned"] = len(result.get("images") or [])
+        try:
+            items = extract_json_block(result["text"])
+            steps["json_parsed"] = True
+            steps["num_items"] = len(items)
+            steps["first_item"] = items[0] if items else None
+        except Exception as pe:
+            steps["json_parsed"] = False
+            steps["parse_error"] = f"{type(pe).__name__}: {pe}"
+        return {"ok": steps.get("json_parsed", False), "steps": steps}
+    except Exception as e:
+        steps["call"] = "failed"
+        steps["error"] = f"{type(e).__name__}: {e}"
+        return {"ok": False, "steps": steps}
+
+
+@api.post("/debug/refresh-world")
+async def debug_refresh_world():
+    """Force a synchronous refresh of news + jakarta and report what happened.
+    Lets the user manually trigger a real fetch and see the outcome immediately."""
+    now = datetime.now(timezone.utc)
+    news_key = "news-" + now.strftime("%Y-%m-%d-%H")[:13]
+    jak_key = "jakarta-" + now.strftime("%Y-%m-%d")
+    out = {}
+    try:
+        await _refresh_news_bg(news_key)
+        cached = await db.world_cache.find_one({"key": news_key}, {"_id": 0})
+        out["news"] = {"refreshed": bool(cached), "num_items": len(cached["data"]["items"]) if cached else 0}
+    except Exception as e:
+        out["news"] = {"error": f"{type(e).__name__}: {e}"}
+    try:
+        await _refresh_jakarta_bg(jak_key)
+        cached = await db.world_cache.find_one({"key": jak_key}, {"_id": 0})
+        out["jakarta"] = {"refreshed": bool(cached), "num_items": len(cached["data"]["items"]) if cached else 0}
+    except Exception as e:
+        out["jakarta"] = {"error": f"{type(e).__name__}: {e}"}
+    return out
+
+
+@api.delete("/debug/clear-world-cache")
+async def clear_world_cache():
+    """Wipe cached news/jakarta so the next request regenerates from scratch."""
+    result = await db.world_cache.delete_many({})
+    return {"deleted": result.deleted_count, "message": "World cache cleared. Next /world/news and /world/jakarta-live will regenerate."}
 
 
 @api.delete("/debug/clear-stock-cache")
