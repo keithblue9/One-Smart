@@ -49,48 +49,102 @@ DEFAULT_PASSCODE = os.environ.get("DEFAULT_PASSCODE", "991285")
 # new Perplexity key value instead of being renamed.
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
 PERPLEXITY_BASE_URL = "https://api.perplexity.ai"
-AI_MODEL = "sonar-pro"              # Production-quality, multi-source, web-grounded (all everyday tasks)
-AI_WEB_MODEL = "sonar-pro"          # Kept as an alias for code paths that used to force web search explicitly
-AI_FAST_MODEL = "sonar"             # Cheaper/faster web-grounded model (quick generation: cities/travel rotation)
-AI_DEEP_MODEL = "sonar-reasoning-pro"  # Chain-of-thought analytical model for comprehensive long-form content (full news narratives, stock analysis)
+AI_MODEL = "sonar-pro"        # Production-quality, multi-source, web-grounded — used for ~everything
+AI_WEB_MODEL = "sonar-pro"    # Alias for code paths that used to force web search explicitly
+AI_FAST_MODEL = "sonar"       # Cheaper/faster web-grounded model (quick generation: cities/travel rotation)
+# NOTE: we deliberately do NOT use "sonar-reasoning-pro" anywhere in this app.
+# Reasoning models spend part of max_tokens on hidden chain-of-thought before
+# writing the final answer; in production this repeatedly produced EMPTY
+# `message.content` (once the token budget ran out mid-thought) and was much
+# slower end-to-end. sonar-pro gives comprehensive, web-grounded, well-cited
+# answers directly, with no hidden-reasoning failure mode.
+AI_DEEP_MODEL = "sonar-pro"   # Kept as an alias (used for long-form: news, jakarta, stock analysis)
 
 
-async def call_perplexity(messages, model=AI_MODEL, max_tokens=2000, temperature=0.4,
-                           return_images=False, search_recency=None, timeout=60):
+def _auto_fallback(model: str) -> str:
+    """Pick a sensible fallback model different from the primary one."""
+    return AI_FAST_MODEL if model != AI_FAST_MODEL else AI_MODEL
+
+
+async def call_perplexity(messages, model=AI_MODEL, max_tokens=3000, temperature=0.4,
+                           return_images=False, search_recency=None, timeout=60,
+                           fallback_model="auto"):
     """Call the Perplexity Sonar chat-completions API directly over HTTP.
 
     We use raw httpx (not the OpenAI SDK) so we have full access to
     Perplexity-specific response fields like `images` and `citations`,
     which aren't part of the standard OpenAI ChatCompletion schema.
+
+    Resilience built in (so the user should never see a raw AI error):
+    - If `return_images` is rejected by the account/plan (HTTP 4xx), we
+      automatically retry the same request without it.
+    - If the model returns empty/None content (the failure mode we hit with
+      reasoning models), we automatically retry once with `fallback_model`
+      (defaults to a different, known-reliable Sonar model).
+
     Returns dict: {text, images, citations, raw}.
     """
     if not PERPLEXITY_API_KEY:
         raise RuntimeError("PERPLEXITY_API_KEY not configured")
-    payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    if return_images:
-        payload["return_images"] = True
-    if search_recency:
-        payload["search_recency_filter"] = search_recency  # "day" | "week" | "month"
-    async with httpx.AsyncClient(timeout=timeout) as http_client:
-        resp = await http_client.post(
-            f"{PERPLEXITY_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
+    if fallback_model == "auto":
+        fallback_model = _auto_fallback(model)
+
+    async def _once(m: str, with_images: bool):
+        payload = {
+            "model": m,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if with_images:
+            payload["return_images"] = True
+        if search_recency:
+            payload["search_recency_filter"] = search_recency  # "day" | "week" | "month"
+        async with httpx.AsyncClient(timeout=timeout) as http_client:
+            resp = await http_client.post(
+                f"{PERPLEXITY_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        text = data["choices"][0]["message"]["content"]
+        images = data.get("images") or []
+        citations = data.get("citations") or []
+        return text, images, citations, data
+
+    # Attempt 1: as requested.
+    try:
+        text, images, citations, raw = await _once(model, return_images)
+    except httpx.HTTPStatusError as e:
+        if return_images:
+            # Some account tiers reject return_images with a 4xx — retry without it
+            # instead of failing the whole request.
+            logger.warning("Perplexity return_images rejected (%s), retrying without it", e)
+            text, images, citations, raw = await _once(model, False)
+        else:
+            raise
+
+    # Attempt 2: primary model returned nothing usable -> try fallback model.
+    if (not text or not str(text).strip()) and fallback_model and fallback_model != model:
+        logger.warning("Perplexity model %s returned empty content, retrying with %s", model, fallback_model)
+        try:
+            text, images, citations, raw = await _once(fallback_model, return_images)
+        except httpx.HTTPStatusError as e:
+            if return_images:
+                text, images, citations, raw = await _once(fallback_model, False)
+            else:
+                raise
+
+    if not text or not str(text).strip():
+        raise RuntimeError(
+            f"Perplexity returned empty content from both '{model}' and fallback '{fallback_model}'"
         )
-        resp.raise_for_status()
-        data = resp.json()
-    text = data["choices"][0]["message"]["content"]
-    images = data.get("images") or []
-    citations = data.get("citations") or []
-    return {"text": text, "images": images, "citations": citations, "raw": data}
+
+    return {"text": text, "images": images, "citations": citations, "raw": raw}
 
 
 def extract_json_block(text: str):
@@ -556,7 +610,8 @@ async def travel_id():
 
 @api.get("/world/jakarta")
 async def jakarta_today():
-    return {"items": JAKARTA_AGENDA, "updated_at": now_iso()}
+    return {"items": _filter_upcoming(JAKARTA_AGENDA, date_field="date", grace_days=1), "updated_at": now_iso()}
+
 
 
 @api.get("/world/cities-dynamic")
@@ -658,6 +713,33 @@ JAKARTA_IMAGE_POOL = {
 }
 
 
+def _filter_upcoming(items: list, date_field: str = "date", grace_days: int = 1) -> list:
+    """Drop items whose date is clearly in the past (defensive — protects
+    against the AI hallucinating stale dates, or old cached/seed data lingering).
+    Items with no parseable date, or a date range where the end date hasn't
+    passed, are kept. `grace_days` allows same-day/just-ended events to still show.
+    """
+    import re
+    today = datetime.now(timezone.utc).date()
+    cutoff = today - timedelta(days=grace_days)
+    kept = []
+    for item in items:
+        raw = str(item.get(date_field) or "")
+        dates_found = re.findall(r"\d{4}-\d{2}-\d{2}", raw)
+        if not dates_found:
+            kept.append(item)  # unparseable / no date -> keep, don't risk dropping valid content
+            continue
+        try:
+            # If it's a range ("2026-06-12 to 2026-07-14"), use the LAST date found.
+            last_date = datetime.strptime(dates_found[-1], "%Y-%m-%d").date()
+            if last_date >= cutoff:
+                kept.append(item)
+        except ValueError:
+            kept.append(item)
+    return kept
+
+
+
 async def _refresh_jakarta_bg(daily_key: str):
     """Background task to refresh Jakarta data without blocking the response."""
     now = datetime.now(timezone.utc)
@@ -665,18 +747,21 @@ async def _refresh_jakarta_bg(daily_key: str):
         today = now.strftime("%d %B %Y")
         result = await call_perplexity(
             model=AI_DEEP_MODEL,
-            max_tokens=4000,
+            max_tokens=6000,
             return_images=True,
             search_recency="week",
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari SEMUA info penting Jakarta hari ini ({today}): event & hiburan 7 hari ke depan, "
+                    f"Cari SEMUA info penting Jakarta hari ini ({today}): event & hiburan 7 hari ke depan "
+                    f"DARI TANGGAL {today} DAN SETELAHNYA SAJA (jangan sertakan event yang sudah lewat), "
                     f"update MRT/LRT/TransJakarta/tol, cuaca & kualitas udara, agenda kota/pemprov, kuliner baru, "
                     f"dan tips praktis warga. JANGAN batasi jumlah item — cakup selengkap dan sebanyak mungkin isu "
                     f"aktual yang kamu temukan hari ini (idealnya 10-15 item, boleh lebih jika memang ada banyak berita relevan). "
                     f"Untuk tiap item, tulis narasi 'summary' yang LENGKAP dan mendalam (minimal 4-6 kalimat, jangan disingkat), "
                     f"jelaskan konteks, dampak ke warga, dan detail konkret (jam, lokasi, harga jika relevan). "
+                    f"Field 'date' WAJIB dalam format ISO YYYY-MM-DD (atau 'YYYY-MM-DD to YYYY-MM-DD' untuk rentang), "
+                    f"dan tanggalnya harus {today} atau setelahnya. "
                     f"Output HANYA JSON array murni (tanpa markdown), format: "
                     f'[{{"emoji":"...","category":"...","title":"...","date":"...","location":"...","summary":"...","tip":"..."}}]. '
                     f"Kategori salah satu dari: Transportasi, Cuaca, Event, Hiburan, Kuliner, Agenda Kota, Kualitas Udara. "
@@ -685,6 +770,7 @@ async def _refresh_jakarta_bg(daily_key: str):
             }],
         )
         items = extract_json_block(result["text"])
+        items = _filter_upcoming(items, date_field="date", grace_days=1)
         images = result.get("images") or []
         for i, item in enumerate(items):
             if images:
@@ -723,7 +809,7 @@ async def jakarta_live(background_tasks: BackgroundTasks):
     # No cache at all — return static instantly, kick off background fetch
     if PERPLEXITY_API_KEY:
         background_tasks.add_task(_refresh_jakarta_bg, daily_key)
-    return {"items": JAKARTA_AGENDA, "updated_at": now_iso(), "loading": True}
+    return {"items": _filter_upcoming(JAKARTA_AGENDA, date_field="date", grace_days=1), "updated_at": now_iso(), "loading": True}
 
 
 NEWS_STATIC_FALLBACK = [
@@ -740,6 +826,7 @@ NEWS_IMAGE_POOL = {
     "Indonesia": "https://images.unsplash.com/photo-1555529771-7888783a18d3?w=900&q=80",
     "Pasar": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=900&q=80",
     "Teknologi": "https://images.unsplash.com/photo-1677442136019-21780ecad995?w=900&q=80",
+    "Gadget": "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=900&q=80",
     "Sepak Bola": "https://images.unsplash.com/photo-1522778119026-d647f0596c20?w=900&q=80",
     "Olahraga": "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=900&q=80",
     "Geopolitik": "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=900&q=80",
@@ -754,24 +841,29 @@ async def _refresh_news_bg(daily_key: str):
         today = now.strftime("%d %B %Y")
         result = await call_perplexity(
             model=AI_DEEP_MODEL,
-            max_tokens=6000,
+            max_tokens=8000,
             return_images=True,
             search_recency="day",
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari berita terkini paling penting hari ini ({today}) untuk pembaca Indonesia muda. "
-                    f"JANGAN batasi jumlah berita ke angka kecil — cakup selengkap dan sebanyak mungkin berita "
-                    f"penting hari ini (idealnya 12-18 item, boleh lebih jika memang banyak berita besar hari ini), "
-                    f"dengan proporsi mencakup: ekonomi global & Indonesia, geopolitik, teknologi/AI, "
-                    f"pasar finansial (IHSG/saham/kripto/rupiah), sepak bola & olahraga (Liga Champions/Premier League/Liga 1/Timnas), "
-                    f"dan berita nasional Indonesia lainnya yang relevan. "
+                    f"Cari berita PALING BARU hari ini ({today}) untuk pembaca Indonesia muda — bukan berita lama, "
+                    f"harus benar-benar berita hari ini atau maksimal 1-2 hari terakhir. "
+                    f"JANGAN batasi jumlah berita ke angka kecil. Kumpulkan minimal 15-20 berita total, WAJIB mencakup "
+                    f"minimal masing-masing 2-3 berita dari SETIAP kategori berikut (jangan lewatkan satupun kategori): "
+                    f"1) Geopolitik Dunia (konflik, diplomasi, kebijakan luar negeri negara besar), "
+                    f"2) Geopolitik/Politik Indonesia (kebijakan pemerintah, isu nasional terkini), "
+                    f"3) Teknologi & AI (perkembangan AI, startup, big tech), "
+                    f"4) Gadget (rilis HP/laptop/perangkat baru, review, harga), "
+                    f"5) Sepak Bola & Olahraga (Liga Champions, Premier League, Liga 1 Indonesia, Timnas, cabang olahraga lain), "
+                    f"6) Ekonomi & Pasar Finansial (global & Indonesia, IHSG, rupiah, saham, kripto). "
+                    f"Boleh tambah kategori lain (Kesehatan, Hiburan, Lingkungan) jika ada berita besar yang layak masuk. "
                     f"Untuk tiap berita, tulis 'summary' sebagai narasi LENGKAP dan mendalam (minimal 5-7 kalimat, "
                     f"JANGAN disingkat atau dipendekkan) yang menjelaskan duduk perkara, latar belakang, dampak "
                     f"bagi Indonesia/investor/pembaca, dan data konkret (angka, tanggal, nama pihak terkait) bila tersedia. "
                     f"Output HANYA JSON array murni (tanpa markdown fences): "
                     f'[{{"category":"...","title":"...","summary":"..."}}]. '
-                    f"Kategori salah satu dari: Ekonomi, Geopolitik, Teknologi, Pasar, Sepak Bola, Olahraga, Indonesia. "
+                    f"Kategori HARUS salah satu dari: Ekonomi, Geopolitik, Indonesia, Teknologi, Gadget, Pasar, Sepak Bola, Olahraga. "
                     f"Bahasa Indonesia. JSON saja, tanpa penjelasan di luar JSON."
                 ),
             }],
@@ -894,12 +986,13 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     )
 
     try:
-        # Sonar models are web-grounded by default; use the deep reasoning model
-        # for topics that need current-data synthesis (stock/investment/general).
+        # Sonar models are web-grounded by default; sonar-pro handles both
+        # everyday and current-data-synthesis topics (stock/investment/general)
+        # reliably and quickly — no reasoning model needed.
         model = AI_DEEP_MODEL if req.topic in WEB_SEARCH_TOPICS else AI_MODEL
         result = await call_perplexity(
             model=model,
-            max_tokens=2500,
+            max_tokens=4000,
             search_recency="week" if req.topic in WEB_SEARCH_TOPICS else None,
             messages=[
                 {"role": "system", "content": system_msg},
@@ -1023,7 +1116,7 @@ async def investment_simulator(req: SimulatorReq, user: dict = Depends(get_user)
     )
     try:
         ai_result = await call_perplexity(
-            model=AI_DEEP_MODEL, max_tokens=2500,
+            model=AI_DEEP_MODEL, max_tokens=3500,
             search_recency="week",
             messages=[{"role": "user", "content": prompt}],
         )

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Newspaper, Buildings, DeviceMobile, Airplane, MapPin, ChartBar,
-         Globe, Lightning, Tree, Cpu } from "@phosphor-icons/react";
+         Globe, Lightning, Tree, Cpu, ArrowClockwise, Clock, CaretDown, CaretUp } from "@phosphor-icons/react";
 import { BarChart, Bar, Cell, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -160,18 +160,42 @@ export default function World() {
   const [travel, setTravel] = useState(TRAVEL_RICH);
   const [owid] = useState(OWID_RICH);
   const [newsLoading, setNewsLoading] = useState(true);
+  const [newsRefreshing, setNewsRefreshing] = useState(false);
+  const [newsUpdatedAt, setNewsUpdatedAt] = useState(null);
+  const [newsCategory, setNewsCategory] = useState("Semua");
+  const [expandedNews, setExpandedNews] = useState(() => new Set());
   const [jakarta, setJakarta] = useState([]);
   const [jakLoading, setJakLoading] = useState(false);
+  const [jakUpdatedAt, setJakUpdatedAt] = useState(null);
+  const [expandedJakarta, setExpandedJakarta] = useState(() => new Set());
   const [citiesRefresh, setCitiesRefresh] = useState(0);
   const [travelRefresh, setTravelRefresh] = useState(0);
   const [citiesLoading, setCitiesLoading] = useState(false);
   const [travelLoading, setTravelLoading] = useState(false);
+
+  const toggleExpanded = (setFn, i) => {
+    setFn(prev => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+  };
+
+  const timeAgo = (iso) => {
+    if (!iso) return "";
+    const diffMin = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+    if (diffMin < 1) return lang === "id" ? "baru saja" : "just now";
+    if (diffMin < 60) return lang === "id" ? `${diffMin} menit lalu` : `${diffMin}m ago`;
+    const diffH = Math.round(diffMin / 60);
+    return lang === "id" ? `${diffH} jam lalu` : `${diffH}h ago`;
+  };
 
   const fetchJakarta = (isPoll = false) => {
     if (!isPoll) setJakLoading(true);
     api.get("/world/jakarta-live")
       .then(r => {
         setJakarta(r.data.items || []);
+        setJakUpdatedAt(r.data.updated_at || null);
         // If backend is still generating fresh data in background, poll again
         if (r.data.loading) {
           setTimeout(() => fetchJakarta(true), 4000);
@@ -197,22 +221,39 @@ export default function World() {
       .finally(() => setTravelLoading(false));
   };
 
+  const loadNews = (isPoll = false) => {
+    if (!isPoll) setNewsLoading(true);
+    api.get("/world/news")
+      .then(r => {
+        setNews(r.data.items || []);
+        setNewsUpdatedAt(r.data.updated_at || null);
+        setNewsLoading(false);
+        // Backend still generating fresh news in background — poll for update
+        if (r.data.loading) {
+          setTimeout(() => loadNews(true), 5000);
+        }
+      })
+      .catch(() => setNewsLoading(false));
+  };
+
+  const refreshNews = () => {
+    setNewsRefreshing(true);
+    api.get("/world/news")
+      .then(r => {
+        setNews(r.data.items || []);
+        setNewsUpdatedAt(r.data.updated_at || null);
+      })
+      .catch(() => {})
+      .finally(() => setNewsRefreshing(false));
+  };
+
   useEffect(() => {
-    const loadNews = (isPoll = false) => {
-      if (!isPoll) setNewsLoading(true);
-      api.get("/world/news")
-        .then(r => {
-          setNews(r.data.items || []);
-          setNewsLoading(false);
-          // Backend still generating fresh news in background — poll for update
-          if (r.data.loading) {
-            setTimeout(() => loadNews(true), 5000);
-          }
-        })
-        .catch(() => setNewsLoading(false));
-    };
     loadNews();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const newsCategories = ["Semua", ...Array.from(new Set(news.map(n => n.category).filter(Boolean)))];
+  const filteredNews = newsCategory === "Semua" ? news : news.filter(n => n.category === newsCategory);
 
   return (
     <div className="px-4 lg:px-10 py-6 lg:py-10 max-w-6xl mx-auto">
@@ -244,9 +285,34 @@ export default function World() {
             </div>
           ) : (
             <>
-              <p className="text-xs text-slate-400 mb-4">{news.length} {lang==="id"?"berita hari ini":"stories today"}</p>
+              <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                <p className="text-xs text-slate-400">
+                  {filteredNews.length} {lang==="id"?"berita":"stories"}
+                  {newsUpdatedAt && <> · <Clock size={11} className="inline -mt-0.5"/> {timeAgo(newsUpdatedAt)}</>}
+                </p>
+                <button onClick={refreshNews} disabled={newsRefreshing}
+                  className="flex items-center gap-1.5 text-xs text-slate-500 border border-slate-200 bg-white px-3 py-1.5 rounded-full hover:bg-slate-50 disabled:opacity-50 transition-all">
+                  <ArrowClockwise size={13} className={newsRefreshing?"animate-spin":""}/> {lang==="id"?"Refresh":"Refresh"}
+                </button>
+              </div>
+              {/* Category filter chips */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                {newsCategories.map(c => (
+                  <button key={c} onClick={()=>setNewsCategory(c)}
+                    className={`text-xs px-3 py-1.5 rounded-full font-medium border transition-colors ${
+                      newsCategory===c
+                        ? "bg-slate-800 text-white border-slate-800"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                    }`}>
+                    {c}
+                  </button>
+                ))}
+              </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                {news.map((n,i)=>(
+                {filteredNews.map((n,i)=>{
+                  const isLong = (n.summary || "").length > 260;
+                  const isExpanded = expandedNews.has(i);
+                  return (
                   <article key={i} className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                     {/* IG-style hero image with gradient overlay + category/title */}
                     <div className="relative h-52 bg-gradient-to-br from-slate-200 to-slate-100">
@@ -261,13 +327,20 @@ export default function World() {
                       </div>
                     </div>
                     <div className="p-5">
-                      <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">{n.summary}</p>
+                      <p className={`text-sm text-slate-600 leading-relaxed whitespace-pre-line ${!isExpanded && isLong ? "line-clamp-4" : ""}`}>{n.summary}</p>
+                      {isLong && (
+                        <button onClick={()=>toggleExpanded(setExpandedNews, i)}
+                          className="flex items-center gap-1 text-xs font-medium text-[#B76E38] mt-1.5 hover:underline">
+                          {isExpanded ? (<>{lang==="id"?"Tampilkan lebih sedikit":"Show less"} <CaretUp size={12}/></>) : (<>{lang==="id"?"Baca selengkapnya":"Read more"} <CaretDown size={12}/></>)}
+                        </button>
+                      )}
                       <div className="mt-4">
                         <AIInsightButton topic="general" context={{headline:n.title, summary:n.summary, ask:"Analisa mendalam: dampak ke investor Indonesia, peluang & risiko yang perlu diwaspadai."}} testId={`ai-news-${i}`}/>
                       </div>
                     </div>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
@@ -457,9 +530,18 @@ export default function World() {
             </div>
           ) : (
             <div>
-              <p className="text-xs text-slate-400 mb-3">{jakarta.length} {lang==="id"?"info hari ini":"updates today"}</p>
+              <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                <p className="text-xs text-slate-400">
+                  {jakarta.length} {lang==="id"?"info hari ini":"updates today"}
+                  {jakUpdatedAt && <> · <Clock size={11} className="inline -mt-0.5"/> {timeAgo(jakUpdatedAt)}</>}
+                </p>
+              </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                {jakarta.map((j,i)=>(
+                {jakarta.map((j,i)=>{
+                  const jsummary = j.summary || j.description || "";
+                  const isLong = jsummary.length > 220;
+                  const isExpanded = expandedJakarta.has(i);
+                  return (
                   <article key={i} className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
                     {/* IG-style hero image with gradient overlay + category/title */}
                     <div className="relative h-48 bg-gradient-to-br from-slate-200 to-slate-100">
@@ -476,14 +558,21 @@ export default function World() {
                       </div>
                     </div>
                     <div className="p-5">
-                      <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">{j.summary || j.description}</p>
+                      <p className={`text-sm text-slate-600 leading-relaxed whitespace-pre-line ${!isExpanded && isLong ? "line-clamp-4" : ""}`}>{jsummary}</p>
+                      {isLong && (
+                        <button onClick={()=>toggleExpanded(setExpandedJakarta, i)}
+                          className="flex items-center gap-1 text-xs font-medium text-[#B76E38] mt-1.5 hover:underline">
+                          {isExpanded ? (<>{lang==="id"?"Tampilkan lebih sedikit":"Show less"} <CaretUp size={12}/></>) : (<>{lang==="id"?"Baca selengkapnya":"Read more"} <CaretDown size={12}/></>)}
+                        </button>
+                      )}
                       {j.tip && <div className="mt-3 text-xs bg-amber-50 text-amber-700 px-3 py-2 rounded-lg">💡 {j.tip}</div>}
                     </div>
                   </article>
-                ))}
+                  );
+                })}
               </div>
-              <button onClick={fetchJakarta} className="mt-4 w-full py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:text-slate-700 hover:border-slate-300 transition-colors">
-                🔄 {lang==="id"?"Refresh Info Jakarta":"Refresh Jakarta Info"}
+              <button onClick={fetchJakarta} className="mt-4 w-full py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:text-slate-700 hover:border-slate-300 transition-colors flex items-center justify-center gap-2">
+                <ArrowClockwise size={14}/> {lang==="id"?"Refresh Info Jakarta":"Refresh Jakarta Info"}
               </button>
             </div>
           )}

@@ -45,6 +45,16 @@ PWA bernama "One Smart" — login 6 digit passcode (default 991285, bisa diganti
 - [x] World.jsx redesigned: News & Jakarta tabs now render large hero-image cards with gradient overlay, category badge & title on the image (matching the existing Travel/Cities IG-style pattern), full-length body copy below
 - [x] Render env var renamed `ANTHROPIC_API_KEY` → `PERPLEXITY_API_KEY` (code falls back to the old var name too, for safety during rollout)
 
+### Phase 4 (v1.3, Jul 2026) — Perplexity reliability fix
+- [x] **Root cause found & fixed**: `sonar-reasoning-pro` was used for all "deep" AI calls (stock insight, investment simulator, news, jakarta-live). Reasoning models spend part of `max_tokens` on hidden chain-of-thought before writing the final answer — in production this repeatedly produced EMPTY `message.content` once the token budget ran out mid-thought (surfaced to users as "AI error: Empty response from AI"), and was also much slower end-to-end. Switched `AI_DEEP_MODEL` to `sonar-pro` everywhere; no more reasoning models used in this app.
+- [x] `call_perplexity()` is now self-healing: (a) auto-retries once with a different fallback model if the primary model returns empty content, (b) auto-retries without `return_images` if that param is rejected by the account tier (HTTP 4xx), (c) raises one clear final error only if both attempts truly fail.
+- [x] Bumped `max_tokens` across the board (news/jakarta 6000-8000, stock/general insight 4000, investment simulator 3500) to give room for the longer narratives without truncation.
+- [x] News prompt now explicitly guarantees minimum coverage per required category (Geopolitik Dunia, Geopolitik/Politik Indonesia, Teknologi, **Gadget** [new], Sepak Bola & Olahraga, Ekonomi & Pasar) with 15-20+ items total, still uncapped.
+- [x] Added `_filter_upcoming()` — drops any Jakarta agenda item (AI-generated or the hardcoded static seed) whose date has clearly passed, so stale/expired events never show even before the AI refresh completes.
+- [x] Frontend UI/UX pass on World.jsx: category filter chips for News, "Baca Selengkapnya" expand/collapse for long summaries (both News & Jakarta cards), last-updated timestamp + manual refresh button for News (Jakarta already had one).
+- [x] Friendlier AI Insight error state (AIInsightButton.jsx): shows a plain-language message + a "Coba Lagi" retry button instead of a raw backend error string.
+- [x] Verified with a full clean `npm run build` (Compiled successfully, 0 errors) plus targeted backend tests reproducing the exact empty-content bug and confirming the fallback recovers automatically.
+
 ## Backlog
 - [ ] Stock data live (Alpha Vantage / Yahoo Finance) — currently curated, AI insight is real
 - [ ] Scraping ourworldindata real-time chart embeds
