@@ -781,6 +781,10 @@ async def travel_dynamic(refresh: int = 0):
     return data
 
 
+# Tracks the most recent AI-refresh error per section so the API can surface a
+# clear, actionable message to the user instead of silently showing static data.
+_world_last_error = {"news": None, "jakarta": None}
+
 JAKARTA_IMAGE_POOL = {
     "Transportasi": "https://images.unsplash.com/photo-1610723384358-b8ee5892fb0f?w=900&q=80",
     "Cuaca": "https://images.unsplash.com/photo-1601134467661-3d775b999c8b?w=900&q=80",
@@ -821,7 +825,8 @@ def _filter_upcoming(items: list, date_field: str = "date", grace_days: int = 1)
 
 
 async def _refresh_jakarta_bg(daily_key: str):
-    """Background task to refresh Jakarta data without blocking the response."""
+    """Background task to refresh Jakarta data without blocking the response.
+    Content is modelled on Jakarta Instagram info accounts (esp. @jktinfo)."""
     now = datetime.now(timezone.utc)
     try:
         today = now.strftime("%d %B %Y")
@@ -833,19 +838,24 @@ async def _refresh_jakarta_bg(daily_key: str):
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari SEMUA info penting Jakarta hari ini ({today}): event & hiburan 7 hari ke depan "
-                    f"DARI TANGGAL {today} DAN SETELAHNYA SAJA (jangan sertakan event yang sudah lewat), "
-                    f"update MRT/LRT/TransJakarta/tol, cuaca & kualitas udara, agenda kota/pemprov, kuliner baru, "
-                    f"dan tips praktis warga. JANGAN batasi jumlah item — cakup selengkap dan sebanyak mungkin isu "
-                    f"aktual yang kamu temukan hari ini (idealnya 10-15 item, boleh lebih jika memang ada banyak berita relevan). "
-                    f"Untuk tiap item, tulis narasi 'summary' yang LENGKAP dan mendalam (minimal 4-6 kalimat, jangan disingkat), "
-                    f"jelaskan konteks, dampak ke warga, dan detail konkret (jam, lokasi, harga jika relevan). "
-                    f"Field 'date' WAJIB dalam format ISO YYYY-MM-DD (atau 'YYYY-MM-DD to YYYY-MM-DD' untuk rentang), "
-                    f"dan tanggalnya harus {today} atau setelahnya. "
-                    f"Output HANYA JSON array murni (tanpa markdown), format: "
-                    f'[{{"emoji":"...","category":"...","title":"...","date":"...","location":"...","summary":"...","tip":"..."}}]. '
-                    f"Kategori salah satu dari: Transportasi, Cuaca, Event, Hiburan, Kuliner, Agenda Kota, Kualitas Udara. "
-                    f"Emoji relevan per item. Bahasa Indonesia. JSON saja, tanpa penjelasan di luar JSON."
+                    f"Kamu adalah kurator konten ala akun Instagram @jktinfo. Buat feed 'Hari Ini di Jakarta' "
+                    f"untuk tanggal {today}, dengan gaya dan jenis konten seperti postingan @jktinfo dan akun info "
+                    f"Jakarta lain (@infojakarta, @jakarta.terkini): event & konser, kuliner/tempat nongkrong baru, "
+                    f"update transportasi (MRT/LRT/TransJakarta/tol), cuaca & kualitas udara, agenda kota/pemprov, "
+                    f"promo & lifestyle, serta info praktis warga. Cari informasi TERKINI dari web (utamakan yang "
+                    f"dibahas @jktinfo dan media Jakarta hari ini/minggu ini). "
+                    f"Untuk EVENT, sertakan HANYA yang tanggalnya {today} atau setelahnya (jangan yang sudah lewat). "
+                    f"JANGAN batasi jumlah item — buat sebanyak mungkin yang relevan (idealnya 10-15+ item). "
+                    f"Untuk tiap item tulis 'summary' sebagai caption ala Instagram yang LENGKAP, informatif, dan enak "
+                    f"dibaca (4-6 kalimat: apa, di mana, kapan, harga/tiket bila ada, kenapa menarik buat warga Jakarta). "
+                    f"Sertakan juga 'caption_hook' (1 kalimat pembuka menarik ala caption IG) dan 'hashtags' "
+                    f"(3-5 hashtag relevan tanpa tanda #, contoh: [\"jakarta\",\"infojakarta\",\"eventjakarta\"]). "
+                    f"Field 'date' dalam format ISO YYYY-MM-DD (atau 'YYYY-MM-DD to YYYY-MM-DD'); untuk info non-event "
+                    f"boleh diisi 'today'. "
+                    f"Output HANYA JSON array murni (tanpa markdown), format tiap item: "
+                    f'{{"emoji":"...","category":"...","title":"...","date":"...","location":"...","caption_hook":"...","summary":"...","hashtags":["..."],"tip":"..."}}. '
+                    f"Kategori salah satu dari: Event, Hiburan, Kuliner, Transportasi, Cuaca, Agenda Kota, Kualitas Udara, Lifestyle. "
+                    f"Emoji relevan per item. Bahasa Indonesia santai ala anak Jakarta. JSON saja, tanpa teks di luar JSON."
                 ),
             }],
         )
@@ -859,13 +869,17 @@ async def _refresh_jakarta_bg(daily_key: str):
             if not item.get("img"):
                 item["img"] = JAKARTA_IMAGE_POOL.get(item.get("category"), JAKARTA_IMAGE_POOL["default"])
         if items:
-            data = {"items": items, "updated_at": now_iso()}
+            data = {"items": items, "updated_at": now_iso(), "source_handle": "@jktinfo"}
             await db.world_cache.update_one(
                 {"key": daily_key},
                 {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
                 upsert=True,
             )
+            _world_last_error["jakarta"] = None
+        else:
+            _world_last_error["jakarta"] = "AI returned no Jakarta items"
     except Exception as e:
+        _world_last_error["jakarta"] = f"{type(e).__name__}: {e}"
         logger.warning("Jakarta bg refresh failed: %s", e)
 
 
@@ -895,9 +909,18 @@ async def jakarta_live(background_tasks: BackgroundTasks):
             if fresh:
                 return fresh["data"]
         except (asyncio.TimeoutError, Exception) as e:
+            _world_last_error["jakarta"] = f"{type(e).__name__}: {e}"
             logger.warning("Sync jakarta first-load failed/slow (%s), serving static + bg", e)
         background_tasks.add_task(_refresh_jakarta_bg, daily_key)
-    return {"items": _filter_upcoming(JAKARTA_AGENDA, date_field="date", grace_days=1), "updated_at": now_iso(), "loading": True}
+    return {
+        "items": _filter_upcoming(JAKARTA_AGENDA, date_field="date", grace_days=1),
+        "updated_at": now_iso(),
+        "loading": bool(PERPLEXITY_API_KEY and not _world_last_error["jakarta"]),
+        "source": "static",
+        "source_handle": "@jktinfo",
+        "ai_error": _world_last_error["jakarta"],
+        "ai_configured": bool(PERPLEXITY_API_KEY),
+    }
 
 
 NEWS_STATIC_FALLBACK = [
@@ -971,7 +994,11 @@ async def _refresh_news_bg(daily_key: str):
                 {"$set": {"key": daily_key, "data": data, "cached_at": now.isoformat()}},
                 upsert=True,
             )
+            _world_last_error["news"] = None
+        else:
+            _world_last_error["news"] = "AI returned no news items"
     except Exception as e:
+        _world_last_error["news"] = f"{type(e).__name__}: {e}"
         logger.warning("News bg refresh failed: %s", e)
 
 
@@ -1012,9 +1039,17 @@ async def world_news(background_tasks: BackgroundTasks):
             if fresh:
                 return fresh["data"]
         except (asyncio.TimeoutError, Exception) as e:
+            _world_last_error["news"] = f"{type(e).__name__}: {e}"
             logger.warning("Sync news first-load failed/slow (%s), serving static + bg", e)
         background_tasks.add_task(_refresh_news_bg, daily_key)
-    return {"items": NEWS_STATIC_FALLBACK, "updated_at": now_iso(), "loading": True}
+    return {
+        "items": NEWS_STATIC_FALLBACK,
+        "updated_at": now_iso(),
+        "loading": bool(PERPLEXITY_API_KEY and not _world_last_error["news"]),
+        "source": "static",
+        "ai_error": _world_last_error["news"],
+        "ai_configured": bool(PERPLEXITY_API_KEY),
+    }
 
 
 # ============== AI INSIGHT (Perplexity Sonar) ==============

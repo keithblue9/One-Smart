@@ -62,6 +62,13 @@ PWA bernama "One Smart" — login 6 digit passcode (default 991285, bisa diganti
 - [x] `/world/news` and `/world/jakarta-live` now do a **bounded (25s) synchronous** fetch on first-ever load, so the first visitor gets real data instead of being stuck on static if background tasks fail; slow/failed sync still falls back to static + background poll.
 - [x] New diagnostics: `GET /api/debug/news-raw` (runs the real news call synchronously, returns Perplexity's raw text + parse result + actual error), `POST /api/debug/refresh-world` (force-refresh news+jakarta, report item counts), `DELETE /api/debug/clear-world-cache` (wipe cache to force regen). `GET /api/debug/ai` now also reports whether the key looks like a `pplx-` key.
 
+### Phase 6 (v1.5, Jul 2026) — make AI failure visible + real IG-style Jakarta
+- [x] **Key realization**: the content users saw ("Pasar Global Bergerak Mixed", "Jakarta Marathon/Java Jazz/Coldplay") is EXACTLY the hardcoded static fallback — proof the Perplexity call never succeeds, so it always falls back to static. Verified via web that model names (sonar/sonar-pro) and the OpenAI-compatible endpoint are correct, so the failure is at the account level: most likely the Perplexity API key has NO CREDITS loaded (pay-as-you-go; a fresh key with $0 returns 401/402), and/or return_images is tier-gated.
+- [x] Failures are no longer swallowed silently. `/world/news` and `/world/jakarta-live` now return `source:"static"`, `ai_error:"<real Perplexity error>"`, and `ai_configured`. The frontend shows an amber `AIStatusBanner` that detects credit/auth errors and tells the user exactly what to fix (add credits at perplexity.ai → Settings → API).
+- [x] Jakarta redesigned as a genuine Instagram feed: post header with the jktinfo avatar ring + handle, square image, like/comment/share/bookmark action bar, "N likes", caption with bold handle + caption_hook + hashtags. Prompt rewritten to curate content in the style of and sourced from @jktinfo (and @infojakarta/@jakarta.terkini).
+- [x] New diagnostics retained: GET /api/debug/news-raw, POST /api/debug/refresh-world, DELETE /api/debug/clear-world-cache, GET /api/debug/ai (reports pplx- key + live test call).
+- [x] Verified: clean npm run build; backend tests for AI-fail error surfacing, IG-field passthrough, and success path.
+
 ## Backlog
 - [ ] Stock data live (Alpha Vantage / Yahoo Finance) — currently curated, AI insight is real
 - [ ] Scraping ourworldindata real-time chart embeds

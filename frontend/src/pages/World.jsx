@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Newspaper, Buildings, DeviceMobile, Airplane, MapPin, ChartBar,
-         Globe, Lightning, Tree, Cpu, ArrowClockwise, Clock, CaretDown, CaretUp } from "@phosphor-icons/react";
+         Globe, Lightning, Tree, Cpu, ArrowClockwise, Clock, CaretDown, CaretUp,
+         Heart, ChatCircle, PaperPlaneTilt, BookmarkSimple, WarningCircle, InstagramLogo } from "@phosphor-icons/react";
 import { BarChart, Bar, Cell, ResponsiveContainer, Tooltip, XAxis } from "recharts";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -26,6 +27,40 @@ const catColor = {
   "Agenda Kota":"bg-slate-100 text-slate-600",
   "Kualitas Udara":"bg-teal-50 text-teal-700",
 };
+
+// Banner shown when AI content couldn't be generated and we're serving static
+// fallback — makes the failure visible & actionable instead of silent.
+function AIStatusBanner({ meta, lang }) {
+  if (!meta || meta.source !== "static") return null;
+  const isKeyMissing = meta.ai_configured === false;
+  const err = meta.ai_error || "";
+  const looksLikeCredits = /401|402|403|credit|billing|unauthor|payment|insufficient/i.test(err);
+  return (
+    <div className="mb-4 p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 text-xs leading-relaxed">
+      <div className="flex items-start gap-2">
+        <WarningCircle size={18} className="text-amber-500 flex-shrink-0 mt-0.5" weight="fill" />
+        <div>
+          <p className="font-semibold">
+            {lang === "id"
+              ? "Menampilkan data contoh — konten AI belum berhasil dimuat."
+              : "Showing sample data — AI content couldn't load yet."}
+          </p>
+          {isKeyMissing ? (
+            <p className="mt-1">{lang === "id"
+              ? "API key Perplexity belum dikonfigurasi di server."
+              : "Perplexity API key isn't configured on the server."}</p>
+          ) : looksLikeCredits ? (
+            <p className="mt-1">{lang === "id"
+              ? "Kemungkinan besar akun Perplexity belum punya saldo/kredit. Buka perplexity.ai → Settings → API → isi saldo (Buy Credits), lalu refresh."
+              : "Your Perplexity account likely has no credits. Go to perplexity.ai → Settings → API → add credits, then refresh."}</p>
+          ) : err ? (
+            <p className="mt-1 font-mono text-[11px] break-all opacity-80">{err}</p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── OWID data with richer context ────────────────────────────────────────────
 const OWID_RICH = [
@@ -164,10 +199,12 @@ export default function World() {
   const [newsUpdatedAt, setNewsUpdatedAt] = useState(null);
   const [newsCategory, setNewsCategory] = useState("Semua");
   const [expandedNews, setExpandedNews] = useState(() => new Set());
+  const [newsMeta, setNewsMeta] = useState({});
   const [jakarta, setJakarta] = useState([]);
   const [jakLoading, setJakLoading] = useState(false);
   const [jakUpdatedAt, setJakUpdatedAt] = useState(null);
   const [expandedJakarta, setExpandedJakarta] = useState(() => new Set());
+  const [jakMeta, setJakMeta] = useState({});
   const [citiesRefresh, setCitiesRefresh] = useState(0);
   const [travelRefresh, setTravelRefresh] = useState(0);
   const [citiesLoading, setCitiesLoading] = useState(false);
@@ -196,6 +233,7 @@ export default function World() {
       .then(r => {
         setJakarta(r.data.items || []);
         setJakUpdatedAt(r.data.updated_at || null);
+        setJakMeta({ source: r.data.source, ai_error: r.data.ai_error, ai_configured: r.data.ai_configured, source_handle: r.data.source_handle });
         // If backend is still generating fresh data in background, poll again
         if (r.data.loading) {
           setTimeout(() => fetchJakarta(true), 4000);
@@ -227,6 +265,7 @@ export default function World() {
       .then(r => {
         setNews(r.data.items || []);
         setNewsUpdatedAt(r.data.updated_at || null);
+        setNewsMeta({ source: r.data.source, ai_error: r.data.ai_error, ai_configured: r.data.ai_configured });
         setNewsLoading(false);
         // Backend still generating fresh news in background — poll for update
         if (r.data.loading) {
@@ -242,6 +281,7 @@ export default function World() {
       .then(r => {
         setNews(r.data.items || []);
         setNewsUpdatedAt(r.data.updated_at || null);
+        setNewsMeta({ source: r.data.source, ai_error: r.data.ai_error, ai_configured: r.data.ai_configured });
       })
       .catch(() => {})
       .finally(() => setNewsRefreshing(false));
@@ -285,6 +325,7 @@ export default function World() {
             </div>
           ) : (
             <>
+              <AIStatusBanner meta={newsMeta} lang={lang} />
               <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
                 <p className="text-xs text-slate-400">
                   {filteredNews.length} {lang==="id"?"berita":"stories"}
@@ -512,67 +553,100 @@ export default function World() {
             ))}
           </div>
         </TabsContent>
-        {/* JAKARTA */}
+        {/* JAKARTA — Instagram-style feed (@jktinfo) */}
         <TabsContent value="jakarta" className="mt-5">
-          <div className="mb-4 p-4 bg-red-50 rounded-xl border border-red-100">
-            <p className="text-xs text-red-700 font-medium">🏙️ {lang==="id"?"Informasi Jakarta hari ini — event, agenda, transportasi, dan update kota — dihasilkan AI dengan data terkini.":"Jakarta today — events, agenda, transport, and city updates — AI-generated with live data."}</p>
+          <div className="mb-4 flex items-center gap-2.5 p-3 rounded-xl bg-gradient-to-r from-pink-50 via-purple-50 to-amber-50 border border-pink-100">
+            <InstagramLogo size={20} className="text-pink-600 flex-shrink-0" weight="fill" />
+            <p className="text-xs text-slate-600">
+              {lang==="id"
+                ? <>Feed <span className="font-semibold">Hari Ini di Jakarta</span> — gaya & sumber ala <span className="font-semibold text-pink-600">@jktinfo</span>, di-kurasi AI dari info terkini.</>
+                : <>The <span className="font-semibold">Today in Jakarta</span> feed — styled & sourced like <span className="font-semibold text-pink-600">@jktinfo</span>, AI-curated from live info.</>}
+            </p>
           </div>
           {jakLoading ? (
-            <div className="space-y-3">{[1,2,3,4].map(i=><div key={i} className="h-24 bg-slate-100 rounded-2xl animate-pulse"/>)}</div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">{[1,2].map(i=><div key={i} className="h-[520px] bg-slate-100 rounded-2xl animate-pulse"/>)}</div>
           ) : jakarta.length === 0 ? (
             <div className="text-center py-12">
               <div className="text-4xl mb-3">🏙️</div>
-              <p className="text-slate-600 font-medium mb-2">{lang==="id"?"Tap untuk memuat info Jakarta hari ini":"Tap to load today's Jakarta info"}</p>
-              <p className="text-xs text-slate-400 mb-4">{lang==="id"?"AI akan mencari event, agenda, transportasi & info terkini":"AI will search for events, agenda, transport & latest info"}</p>
-              <button onClick={fetchJakarta} className="px-5 py-2.5 bg-[#2c4a3b] text-white rounded-xl text-sm font-medium hover:bg-[#1e3328] transition-colors">
-                {lang==="id"?"🔍 Muat Info Jakarta":"🔍 Load Jakarta Info"}
+              <p className="text-slate-600 font-medium mb-2">{lang==="id"?"Tap untuk memuat feed Jakarta hari ini":"Tap to load today's Jakarta feed"}</p>
+              <button onClick={fetchJakarta} className="px-5 py-2.5 bg-gradient-to-r from-pink-500 to-purple-500 text-white rounded-xl text-sm font-medium hover:opacity-90 transition-opacity">
+                {lang==="id"?"📸 Muat Feed Jakarta":"📸 Load Jakarta Feed"}
               </button>
             </div>
           ) : (
             <div>
-              <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+              <AIStatusBanner meta={jakMeta} lang={lang} />
+              <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
                 <p className="text-xs text-slate-400">
-                  {jakarta.length} {lang==="id"?"info hari ini":"updates today"}
+                  {jakarta.length} {lang==="id"?"postingan":"posts"}
                   {jakUpdatedAt && <> · <Clock size={11} className="inline -mt-0.5"/> {timeAgo(jakUpdatedAt)}</>}
                 </p>
               </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {jakarta.map((j,i)=>{
-                  const jsummary = j.summary || j.description || "";
-                  const isLong = jsummary.length > 220;
+                  const cap = j.summary || j.description || "";
+                  const isLong = cap.length > 150;
                   const isExpanded = expandedJakarta.has(i);
+                  const tags = Array.isArray(j.hashtags) ? j.hashtags : [];
+                  const pseudoLikes = 240 + ((j.title||"").length * 37 % 4200);
                   return (
-                  <article key={i} className="bg-white rounded-2xl border border-slate-100 overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                    {/* IG-style hero image with gradient overlay + category/title */}
-                    <div className="relative h-48 bg-gradient-to-br from-slate-200 to-slate-100">
+                  <article key={i} className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+                    {/* IG post header */}
+                    <div className="flex items-center gap-2.5 px-3.5 py-2.5">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600 p-[2px]">
+                        <div className="w-full h-full rounded-full bg-white flex items-center justify-center text-sm">🏙️</div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 leading-tight">jktinfo</p>
+                        {j.location && <p className="text-[11px] text-slate-500 leading-tight truncate">📍 {j.location}</p>}
+                      </div>
+                      {j.category && <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${catColor[j.category]||"bg-slate-100 text-slate-600"}`}>{j.category}</span>}
+                    </div>
+                    {/* IG square-ish image */}
+                    <div className="relative w-full aspect-square bg-gradient-to-br from-slate-200 to-slate-100">
                       {j.img && (
                         <img src={j.img} alt={j.title} className="w-full h-full object-cover absolute inset-0"
                              onError={e=>{e.target.style.display="none"}}/>
                       )}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent"/>
-                      <div className="absolute top-3 left-3 text-2xl drop-shadow">{j.emoji || "📌"}</div>
-                      <div className="absolute bottom-3 left-4 right-4">
-                        {j.category && <span className={`text-[11px] px-2.5 py-1 rounded-full font-semibold backdrop-blur-sm ${catColor[j.category]||"bg-white/80 text-slate-700"}`}>{j.category}</span>}
-                        <h3 className="text-white font-bold text-lg mt-2 leading-snug drop-shadow">{j.title}</h3>
-                        {j.date && <div className="text-white/85 text-xs mt-1 drop-shadow">📅 {j.date} {j.location && `· 📍 ${j.location}`}</div>}
-                      </div>
+                      <div className="absolute top-3 left-3 text-2xl drop-shadow-lg">{j.emoji || "📌"}</div>
+                      {j.date && j.date !== "today" && (
+                        <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-sm text-white text-xs px-2.5 py-1 rounded-full">📅 {j.date}</div>
+                      )}
                     </div>
-                    <div className="p-5">
-                      <p className={`text-sm text-slate-600 leading-relaxed whitespace-pre-line ${!isExpanded && isLong ? "line-clamp-4" : ""}`}>{jsummary}</p>
+                    {/* IG action bar */}
+                    <div className="flex items-center gap-4 px-3.5 pt-3 pb-1">
+                      <Heart size={24} className="text-slate-800 hover:text-red-500 cursor-pointer transition-colors" />
+                      <ChatCircle size={24} className="text-slate-800" />
+                      <PaperPlaneTilt size={22} className="text-slate-800" />
+                      <BookmarkSimple size={24} className="text-slate-800 ml-auto" />
+                    </div>
+                    <div className="px-3.5 pb-3.5">
+                      <p className="text-sm font-semibold text-slate-800">{pseudoLikes.toLocaleString()} {lang==="id"?"suka":"likes"}</p>
+                      {/* Caption */}
+                      <div className="mt-1 text-sm text-slate-700 leading-relaxed">
+                        <span className="font-semibold text-slate-800">jktinfo</span>{" "}
+                        {j.caption_hook && <span className="font-medium">{j.caption_hook} </span>}
+                        <span className={`whitespace-pre-line ${!isExpanded && isLong ? "line-clamp-3" : ""}`}>{cap}</span>
+                      </div>
                       {isLong && (
                         <button onClick={()=>toggleExpanded(setExpandedJakarta, i)}
-                          className="flex items-center gap-1 text-xs font-medium text-[#B76E38] mt-1.5 hover:underline">
-                          {isExpanded ? (<>{lang==="id"?"Tampilkan lebih sedikit":"Show less"} <CaretUp size={12}/></>) : (<>{lang==="id"?"Baca selengkapnya":"Read more"} <CaretDown size={12}/></>)}
+                          className="text-xs text-slate-400 mt-0.5 hover:text-slate-600">
+                          {isExpanded ? (lang==="id"?"lebih sedikit":"less") : (lang==="id"?"selengkapnya":"more")}
                         </button>
                       )}
-                      {j.tip && <div className="mt-3 text-xs bg-amber-50 text-amber-700 px-3 py-2 rounded-lg">💡 {j.tip}</div>}
+                      {tags.length > 0 && (
+                        <p className="mt-1.5 text-sm text-blue-500 leading-relaxed">
+                          {tags.map((tag,ti)=><span key={ti}>#{String(tag).replace(/^#/,"")} </span>)}
+                        </p>
+                      )}
+                      {j.tip && <div className="mt-2.5 text-xs bg-amber-50 text-amber-700 px-3 py-2 rounded-lg">💡 {j.tip}</div>}
                     </div>
                   </article>
                   );
                 })}
               </div>
-              <button onClick={fetchJakarta} className="mt-4 w-full py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:text-slate-700 hover:border-slate-300 transition-colors flex items-center justify-center gap-2">
-                <ArrowClockwise size={14}/> {lang==="id"?"Refresh Info Jakarta":"Refresh Jakarta Info"}
+              <button onClick={fetchJakarta} className="mt-5 w-full py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:text-slate-700 hover:border-slate-300 transition-colors flex items-center justify-center gap-2">
+                <ArrowClockwise size={14}/> {lang==="id"?"Refresh Feed":"Refresh Feed"}
               </button>
             </div>
           )}
