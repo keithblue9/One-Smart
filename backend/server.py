@@ -759,35 +759,46 @@ def _filter_upcoming(items: list, date_field: str = "date", grace_days: int = 1)
 
 
 async def _refresh_jakarta_bg(daily_key: str):
-    """Refresh Jakarta feed using Claude + web_search. Content styled like @jktinfo."""
+    """Refresh Jakarta feed using Claude Sonnet with @jktinfo-style prompt.
+    
+    NOT using web_search (causes JSON failure + slow). Instead inject today's
+    date and prompt Claude to write like @jktinfo from its training knowledge.
+    """
     now = datetime.now(timezone.utc)
     try:
-        today = now.strftime("%d %B %Y")
+        today_str = now.strftime("%d %B %Y")
+        today_iso = now.strftime("%Y-%m-%d")
         result = await call_claude(
-            model=AI_WEB_MODEL,
+            model=AI_MODEL,
             max_tokens=6000,
-            use_web_search=True,
+            use_web_search=False,
+            system=(
+                "Kamu adalah admin akun Instagram @jktinfo yang paling aktif. "
+                "Tugas kamu: buat feed harian 'Hari Ini di Jakarta' dengan konten yang informatif, "
+                "relevan, dan ditulis dengan gaya bahasa anak Jakarta yang santai tapi berisi. "
+                "Output SELALU berupa JSON array murni saja, tanpa teks lain, tanpa markdown fences."
+            ),
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Hari ini {today}. Kamu adalah kurator konten ala akun Instagram @jktinfo. "
-                    f"Cari info TERKINI Jakarta hari ini dari web (prioritaskan @jktinfo, Detik, Kompas, "
-                    f"media Jakarta): event & konser mendatang (HANYA yang tanggalnya {today} atau setelahnya, "
-                    f"jangan yang sudah lewat), kuliner & tempat nongkrong baru, update transportasi "
-                    f"MRT/LRT/TransJakarta/tol hari ini, cuaca & kualitas udara, agenda Pemprov DKI, "
-                    f"promo & lifestyle, dan info praktis warga. "
-                    f"Buat minimal 10 postingan. Untuk tiap postingan, tulis 'summary' sebagai caption "
-                    f"ala Instagram yang PANJANG dan INFORMATIF — gaya bahasa anak Jakarta, santai, "
-                    f"tapi isinya lengkap (5-7 kalimat: apa, kapan, di mana, harga/tiket bila ada, "
-                    f"kenapa menarik buat warga Jakarta). Sertakan 'caption_hook' (1 kalimat pembuka "
-                    f"yang bikin orang penasaran, ala caption viral @jktinfo), dan 'hashtags' (4-6 hashtag "
-                    f"relevan sebagai array string tanpa tanda #). "
-                    f"Field 'date' format YYYY-MM-DD atau 'YYYY-MM-DD to YYYY-MM-DD'; untuk info non-event "
-                    f"isi 'today'. "
-                    f"Output HANYA JSON array murni (tanpa markdown): "
-                    f'{{"emoji":"...","category":"...","title":"...","date":"...","location":"...","caption_hook":"...","summary":"...","hashtags":["..."],"tip":"..."}}. '
-                    f"Kategori: Event, Hiburan, Kuliner, Transportasi, Cuaca, Agenda Kota, Kualitas Udara, Lifestyle. "
-                    f"Bahasa Indonesia santai ala anak Jakarta. JSON saja."
+                    f"Hari ini {today_str}. Buat 12 postingan untuk feed Instagram @jktinfo 'Hari Ini di Jakarta'.\n\n"
+                    f"Kategori yang HARUS ada (minimal 1-2 postingan tiap kategori):\n"
+                    f"- Event: konser, pameran, festival, atau acara seni di Jakarta\n"
+                    f"- Kuliner: restoran/kafe baru atau hidden gem yang lagi viral\n"
+                    f"- Transportasi: update MRT, LRT, TransJakarta, atau kondisi jalan tol\n"
+                    f"- Cuaca: prakiraan cuaca Jakarta hari ini\n"
+                    f"- Hiburan: tempat nongkrong, weekend getaway dari Jakarta\n"
+                    f"- Lifestyle: promo, tips hidup di Jakarta, info praktis warga\n"
+                    f"- Agenda Kota: kegiatan Pemprov DKI, DPRD, atau pembangunan kota\n\n"
+                    f"Untuk setiap postingan:\n"
+                    f"- 'caption_hook': 1 kalimat pembuka yang menarik dan bikin penasaran\n"
+                    f"- 'summary': caption panjang (5-7 kalimat) gaya @jktinfo — apa, di mana, kapan, "
+                    f"  harga/tiket jika ada, kenapa worth it buat warga Jakarta\n"
+                    f"- 'hashtags': array 4-5 hashtag (tanpa tanda #)\n"
+                    f"- 'tip': 1 tips praktis singkat\n"
+                    f"- 'date': '{today_iso}' untuk event hari ini, atau 'YYYY-MM-DD' untuk event mendatang\n\n"
+                    f"Output HANYA JSON array (no fences, no preamble):\n"
+                    f'[{{"emoji":"🎵","category":"Event","title":"...","date":"{today_iso}","location":"...","caption_hook":"...","summary":"...","hashtags":["jakarta"],"tip":"..."}}]'
                 ),
             }],
         )
@@ -803,6 +814,7 @@ async def _refresh_jakarta_bg(daily_key: str):
                 upsert=True,
             )
             _world_last_error["jakarta"] = None
+            logger.info("Jakarta refreshed: %d items", len(items))
         else:
             _world_last_error["jakarta"] = "AI returned no Jakarta items"
     except Exception as e:
@@ -827,22 +839,15 @@ async def jakarta_live(background_tasks: BackgroundTasks):
             background_tasks.add_task(_refresh_jakarta_bg, daily_key)
         return cached["data"]
 
-    # No cache at all — attempt a bounded synchronous fetch so the first visitor
-    # gets real data; fall back to (date-filtered) static + background if slow.
+    # No cache — kick off background fetch, return static instantly.
+    # Claude Sonnet takes 15-30s to generate 12 items — too slow for sync.
+    # Frontend polls every 5s and will pick up the result when ready.
     if ANTHROPIC_API_KEY:
-        try:
-            await asyncio.wait_for(_refresh_jakarta_bg(daily_key), timeout=25)
-            fresh = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
-            if fresh:
-                return fresh["data"]
-        except (asyncio.TimeoutError, Exception) as e:
-            _world_last_error["jakarta"] = f"{type(e).__name__}: {e}"
-            logger.warning("Sync jakarta first-load failed/slow (%s), serving static + bg", e)
         background_tasks.add_task(_refresh_jakarta_bg, daily_key)
     return {
         "items": _filter_upcoming(JAKARTA_AGENDA, date_field="date", grace_days=1),
         "updated_at": now_iso(),
-        "loading": bool(ANTHROPIC_API_KEY and not _world_last_error["jakarta"]),
+        "loading": bool(ANTHROPIC_API_KEY),
         "source": "static",
         "source_handle": "@jktinfo",
         "ai_error": _world_last_error["jakarta"],
@@ -873,30 +878,48 @@ NEWS_IMAGE_POOL = {
 
 
 async def _refresh_news_bg(daily_key: str):
-    """Refresh world news using Claude + web_search for real today's news."""
+    """Refresh world news using Claude Sonnet with rich jurnalistic system prompt.
+    
+    NOT using web_search tool — when web_search is enabled Claude returns narrative
+    prose (not JSON), causing 'No parseable JSON' errors. Instead we inject today's
+    date and give Claude a strong jurnalistic system prompt to write Kompas/Detik-
+    length articles from its training knowledge. Cached 2h per hourly bucket.
+    """
     now = datetime.now(timezone.utc)
     try:
-        today = now.strftime("%d %B %Y")
+        today_str = now.strftime("%d %B %Y")
         result = await call_claude(
-            model=AI_WEB_MODEL,
+            model=AI_MODEL,
             max_tokens=8000,
-            use_web_search=True,
+            use_web_search=False,
+            system=(
+                "Kamu adalah jurnalis senior Indonesia dengan pengalaman 15 tahun di Kompas, Detik, dan BBC Indonesia. "
+                "Tugas kamu: menulis berita dengan narasi PANJANG, UTUH, dan INFORMATIF seperti artikel Kompas.com. "
+                "Setiap berita minimal 6-8 kalimat penuh — bukan ringkasan. "
+                "Output SELALU berupa JSON array murni saja, tanpa teks lain, tanpa markdown fences."
+            ),
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Hari ini {today}. Cari dan tulis berita TERKINI hari ini dari sumber terpercaya "
-                    f"(Kompas, Detik, BBC, Reuters, CNN Indonesia, Bloomberg, dll). "
-                    f"Kumpulkan minimal 15 berita, WAJIB mencakup semua kategori ini: "
-                    f"Geopolitik Dunia, Indonesia, Teknologi, Gadget, Sepak Bola, Olahraga, Ekonomi, Pasar. "
-                    f"Untuk SETIAP berita, tulis narasi sepanjang artikel berita sungguhan — "
-                    f"bukan ringkasan 2 kalimat. Standar seperti artikel Kompas.com atau Detik.com: "
-                    f"minimal 5-8 kalimat per berita, mencakup: apa yang terjadi, siapa yang terlibat, "
-                    f"kapan dan di mana, latar belakang mengapa ini penting, angka/data konkret bila ada, "
-                    f"dan dampak atau perkembangan yang ditunggu ke depan. "
-                    f"Output HANYA JSON array murni tanpa markdown: "
-                    f'[{{"category":"...","title":"...","summary":"..."}}]. '
-                    f"Kategori harus salah satu dari: Ekonomi, Geopolitik, Indonesia, Teknologi, Gadget, Pasar, Sepak Bola, Olahraga. "
-                    f"Bahasa Indonesia. JSON saja."
+                    f"Hari ini tanggal {today_str}. Tulis 15 berita penting terkini dengan narasi "
+                    f"jurnalistik PANJANG dan LENGKAP untuk pembaca Indonesia.\n\n"
+                    f"WAJIB mencakup semua kategori ini (minimal 2 berita per kategori):\n"
+                    f"- Geopolitik: konflik aktif, diplomasi, kebijakan luar negeri negara besar\n"
+                    f"- Indonesia: kebijakan pemerintah, isu nasional, politik, hukum\n"
+                    f"- Ekonomi: pertumbuhan ekonomi, inflasi, perdagangan global & Indonesia\n"
+                    f"- Pasar: IHSG, rupiah, saham global, kripto, komoditas\n"
+                    f"- Teknologi: AI terbaru, startup, big tech, inovasi digital\n"
+                    f"- Gadget: rilis perangkat baru, HP, laptop, review, harga\n"
+                    f"- Sepak Bola: Liga Champions, Premier League, Liga 1, Timnas Indonesia\n"
+                    f"- Olahraga: cabang lain, prestasi atlet Indonesia\n\n"
+                    f"Format setiap 'summary' seperti artikel Kompas.com (6-8 kalimat):\n"
+                    f"Kalimat 1-2: apa yang terjadi + siapa + kapan/di mana\n"
+                    f"Kalimat 3-4: konteks dan latar belakang mengapa ini penting\n"
+                    f"Kalimat 5-6: data/angka konkret atau pernyataan pihak terkait\n"
+                    f"Kalimat 7-8: dampak, perkembangan ke depan, relevansi bagi Indonesia\n\n"
+                    f"Output HANYA JSON array ini (no fences, no preamble, no trailing text):\n"
+                    f'[{{"category":"Geopolitik","title":"...","summary":"..."}}, ...]\n'
+                    f"category harus salah satu: Geopolitik, Indonesia, Ekonomi, Pasar, Teknologi, Gadget, Sepak Bola, Olahraga"
                 ),
             }],
         )
@@ -911,6 +934,7 @@ async def _refresh_news_bg(daily_key: str):
                 upsert=True,
             )
             _world_last_error["news"] = None
+            logger.info("News refreshed: %d items", len(items))
         else:
             _world_last_error["news"] = "AI returned no news items"
     except Exception as e:
@@ -944,31 +968,21 @@ async def world_news(background_tasks: BackgroundTasks):
             background_tasks.add_task(_refresh_news_bg, daily_key)
         return recent["data"]
 
-    # First-ever load with no cache anywhere. Try a bounded SYNCHRONOUS refresh so
-    # the very first visitor gets real news instead of being stuck on static
-    # forever if background tasks silently fail. If it's too slow, fall back to
-    # static + background and let the frontend poll.
+    # No cache — Claude Sonnet 15 articles takes 20-35s, too slow for sync.
+    # Kick off background task, return static instantly, frontend polls every 8s.
     if ANTHROPIC_API_KEY:
-        try:
-            await asyncio.wait_for(_refresh_news_bg(daily_key), timeout=25)
-            fresh = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
-            if fresh:
-                return fresh["data"]
-        except (asyncio.TimeoutError, Exception) as e:
-            _world_last_error["news"] = f"{type(e).__name__}: {e}"
-            logger.warning("Sync news first-load failed/slow (%s), serving static + bg", e)
         background_tasks.add_task(_refresh_news_bg, daily_key)
     return {
         "items": NEWS_STATIC_FALLBACK,
         "updated_at": now_iso(),
-        "loading": bool(ANTHROPIC_API_KEY and not _world_last_error["news"]),
+        "loading": bool(ANTHROPIC_API_KEY),
         "source": "static",
         "ai_error": _world_last_error["news"],
         "ai_configured": bool(ANTHROPIC_API_KEY),
     }
 
 
-# ============== AI INSIGHT (Perplexity Sonar) ==============
+# ============== AI INSIGHT ==============
 INSIGHT_PROMPTS = {
     "scholarship": "Anda mentor beasiswa S2 berpengalaman 15+ tahun. Berikan tips & trick KONKRET untuk lolos beasiswa ini berdasarkan data: {context}. Fokus: essay, interview, portfolio, timeline. Output dalam markdown bullet. Maksimal 6 poin actionable, masing-masing 1-2 kalimat. Bahasa: {language}.",
     "salary": "Anda career coach global tech. Berdasarkan data perusahaan: {context}, berikan: (1) Estimasi salary range untuk role utama (entry/mid/senior) dalam USD; (2) 4 tips konkret membangun portofolio yang menarik untuk perusahaan ini. Markdown ringkas. Bahasa: {language}.",

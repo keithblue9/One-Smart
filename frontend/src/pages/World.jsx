@@ -227,16 +227,20 @@ export default function World() {
     return lang === "id" ? `${diffH} jam lalu` : `${diffH}h ago`;
   };
 
-  const fetchJakarta = (isPoll = false) => {
+  const fetchJakarta = (isPoll = false, attempt = 0) => {
     if (!isPoll) setJakLoading(true);
     api.get("/world/jakarta-live")
       .then(r => {
         setJakarta(r.data.items || []);
         setJakUpdatedAt(r.data.updated_at || null);
-        setJakMeta({ source: r.data.source, ai_error: r.data.ai_error, ai_configured: r.data.ai_configured, source_handle: r.data.source_handle });
-        // If backend is still generating fresh data in background, poll again
-        if (r.data.loading) {
-          setTimeout(() => fetchJakarta(true), 4000);
+        if (r.data.source !== "static") {
+          setJakMeta({});
+        } else {
+          setJakMeta({ source: r.data.source, ai_error: r.data.ai_error, ai_configured: r.data.ai_configured, source_handle: r.data.source_handle });
+        }
+        // Keep polling while backend generates (max 10 attempts = ~80s)
+        if (r.data.loading && attempt < 10) {
+          setTimeout(() => fetchJakarta(true, attempt + 1), 8000);
         }
       })
       .catch(() => setJakarta([]))
@@ -259,17 +263,24 @@ export default function World() {
       .finally(() => setTravelLoading(false));
   };
 
-  const loadNews = (isPoll = false) => {
+  const loadNews = (isPoll = false, attempt = 0) => {
     if (!isPoll) setNewsLoading(true);
     api.get("/world/news")
       .then(r => {
-        setNews(r.data.items || []);
+        const items = r.data.items || [];
+        const isRealData = r.data.source !== "static" || !r.data.loading;
+        setNews(items);
         setNewsUpdatedAt(r.data.updated_at || null);
-        setNewsMeta({ source: r.data.source, ai_error: r.data.ai_error, ai_configured: r.data.ai_configured });
+        // Clear error banner once we have real AI data
+        if (r.data.source !== "static") {
+          setNewsMeta({});
+        } else {
+          setNewsMeta({ source: r.data.source, ai_error: r.data.ai_error, ai_configured: r.data.ai_configured });
+        }
         setNewsLoading(false);
-        // Backend still generating fresh news in background — poll for update
-        if (r.data.loading) {
-          setTimeout(() => loadNews(true), 5000);
+        // Keep polling while backend is generating (max 10 attempts = ~80s)
+        if (r.data.loading && attempt < 10) {
+          setTimeout(() => loadNews(true, attempt + 1), 8000);
         }
       })
       .catch(() => setNewsLoading(false));
@@ -326,10 +337,20 @@ export default function World() {
           ) : (
             <>
               <AIStatusBanner meta={newsMeta} lang={lang} />
+              {/* Show subtle indicator when AI is generating in background */}
+              {newsMeta.source === "static" && newsMeta.ai_configured !== false && !newsMeta.ai_error && (
+                <div className="mb-3 flex items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+                  <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse flex-shrink-0"/>
+                  {lang==="id"
+                    ? "AI sedang menyiapkan berita terkini… halaman akan otomatis update."
+                    : "AI is preparing today's news… page will auto-update."}
+                </div>
+              )}
               <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
                 <p className="text-xs text-slate-400">
                   {filteredNews.length} {lang==="id"?"berita":"stories"}
                   {newsUpdatedAt && <> · <Clock size={11} className="inline -mt-0.5"/> {timeAgo(newsUpdatedAt)}</>}
+                  {newsMeta.source !== "static" && <> · <span className="text-green-600">● AI</span></>}
                 </p>
                 <button onClick={refreshNews} disabled={newsRefreshing}
                   className="flex items-center gap-1.5 text-xs text-slate-500 border border-slate-200 bg-white px-3 py-1.5 rounded-full hover:bg-slate-50 disabled:opacity-50 transition-all">
