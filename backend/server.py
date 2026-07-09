@@ -16,6 +16,7 @@ import jwt
 import json
 import asyncio
 import httpx
+from anthropic import AsyncAnthropic
 
 from data_store import (
     SCHOLARSHIPS,
@@ -44,120 +45,53 @@ DEFAULT_PASSCODE = os.environ.get("DEFAULT_PASSCODE", "991285")
 # All AI features were migrated from Anthropic (Claude) to Perplexity (Sonar).
 # Sonar models are web-grounded by default -- no separate "web_search" tool
 # needs to be attached, unlike the old Anthropic integration.
-# We accept PERPLEXITY_API_KEY as the primary env var, but fall back to
-# ANTHROPIC_API_KEY too in case the same Render env var slot was reused with a
-# new Perplexity key value instead of being renamed.
-PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
-PERPLEXITY_BASE_URL = "https://api.perplexity.ai"
-AI_MODEL = "sonar-pro"        # Production-quality, multi-source, web-grounded — used for ~everything
-AI_WEB_MODEL = "sonar-pro"    # Alias for code paths that used to force web search explicitly
-AI_FAST_MODEL = "sonar"       # Cheaper/faster web-grounded model (quick generation: cities/travel rotation)
-# NOTE: we deliberately do NOT use "sonar-reasoning-pro" anywhere in this app.
-# Reasoning models spend part of max_tokens on hidden chain-of-thought before
-# writing the final answer; in production this repeatedly produced EMPTY
-# `message.content` (once the token budget ran out mid-thought) and was much
-# slower end-to-end. sonar-pro gives comprehensive, web-grounded, well-cited
-# answers directly, with no hidden-reasoning failure mode.
-AI_DEEP_MODEL = "sonar-pro"   # Kept as an alias (used for long-form: news, jakarta, stock analysis)
+# ── Anthropic (Claude) AI configuration ──────────────────────────────────────
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AI_MODEL = "claude-sonnet-4-5"              # Sonnet: long-form news, jakarta, stock insight, investment sim
+AI_WEB_MODEL = "claude-sonnet-4-5"          # Sonnet required for web_search tool
+AI_FAST_MODEL = "claude-haiku-4-5-20251001" # Haiku: fast interactive (chat, life-goal, cities, travel)
+AI_DEEP_MODEL = "claude-sonnet-4-5"         # Alias used by news/jakarta/deep-analysis paths
+
+anthropic_client: Optional[AsyncAnthropic] = None
+if ANTHROPIC_API_KEY:
+    anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def _auto_fallback(model: str) -> str:
-    """Pick a sensible fallback model different from the primary one."""
-    return AI_FAST_MODEL if model != AI_FAST_MODEL else AI_MODEL
+async def call_claude(messages, model=AI_MODEL, max_tokens=4000, system=None,
+                      use_web_search=False, temperature=0.4):
+    """Unified Claude call helper.
 
-
-async def call_perplexity(messages, model=AI_MODEL, max_tokens=3000, temperature=0.4,
-                           return_images=False, search_recency=None, timeout=60,
-                           fallback_model="auto"):
-    """Call the Perplexity Sonar chat-completions API directly over HTTP.
-
-    We use raw httpx (not the OpenAI SDK) so we have full access to
-    Perplexity-specific response fields like `images` and `citations`,
-    which aren't part of the standard OpenAI ChatCompletion schema.
-
-    Resilience built in (so the user should never see a raw AI error):
-    - If `return_images` is rejected by the account/plan (HTTP 4xx), we
-      automatically retry the same request without it.
-    - If the model returns empty/None content (the failure mode we hit with
-      reasoning models), we automatically retry once with `fallback_model`
-      (defaults to a different, known-reliable Sonar model).
-
-    Returns dict: {text, images, citations, raw}.
+    - use_web_search=True  → attaches the web_search_20250305 tool (Sonnet+ only).
+      This lets Claude pull today's real news, current prices, live Jakarta info.
+    - Returns dict: {text, raw}
     """
-    if not PERPLEXITY_API_KEY:
-        raise RuntimeError("PERPLEXITY_API_KEY not configured")
-    if fallback_model == "auto":
-        fallback_model = _auto_fallback(model)
+    if not anthropic_client:
+        raise RuntimeError("ANTHROPIC_API_KEY not configured")
+    kwargs = dict(model=model, max_tokens=max_tokens,
+                  messages=messages if isinstance(messages, list) else [{"role": "user", "content": messages}])
+    if system:
+        kwargs["system"] = system
+    if use_web_search:
+        kwargs["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
+        kwargs["model"] = AI_WEB_MODEL  # web_search requires Sonnet+
+    resp = await anthropic_client.messages.create(**kwargs)
+    # Extract all text blocks (web_search responses interleave tool_use + text)
+    text = "".join(b.text for b in resp.content if hasattr(b, "text") and b.type == "text")
+    return {"text": text, "raw": resp}
 
-    async def _once(m: str, with_images: bool, with_recency: bool):
-        payload = {
-            "model": m,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        if with_images:
-            payload["return_images"] = True
-        if with_recency and search_recency:
-            payload["search_recency_filter"] = search_recency  # "day" | "week" | "month"
-        async with httpx.AsyncClient(timeout=timeout) as http_client:
-            resp = await http_client.post(
-                f"{PERPLEXITY_BASE_URL}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-            if resp.status_code >= 400:
-                # Surface Perplexity's actual error body (invaluable for debugging).
-                body = resp.text[:500]
-                raise httpx.HTTPStatusError(
-                    f"HTTP {resp.status_code} from Perplexity: {body}",
-                    request=resp.request, response=resp,
-                )
-            data = resp.json()
-        text = data["choices"][0]["message"]["content"]
-        images = data.get("images") or []
-        citations = data.get("citations") or []
-        return text, images, citations, data
 
-    async def _try_model(m: str):
-        """Try a model, progressively dropping optional params on 4xx."""
-        attempts = [(return_images, True), (False, True), (False, False)]
-        # de-dupe while preserving order
-        seen, ordered = set(), []
-        for a in attempts:
-            if a not in seen:
-                seen.add(a); ordered.append(a)
-        last_err = None
-        for with_images, with_recency in ordered:
-            try:
-                return await _once(m, with_images, with_recency)
-            except httpx.HTTPStatusError as e:
-                last_err = e
-                # 401/403 (auth) won't be fixed by dropping params — fail fast.
-                if e.response is not None and e.response.status_code in (401, 403):
-                    raise
-                logger.warning("Perplexity call failed (images=%s recency=%s): %s — trying leaner params",
-                               with_images, with_recency, e)
-                continue
-        raise last_err
-
-    # Attempt with primary model.
-    text, images, citations, raw = await _try_model(model)
-
-    # If primary returned empty content, try the fallback model.
-    if (not text or not str(text).strip()) and fallback_model and fallback_model != model:
-        logger.warning("Perplexity model %s returned empty content, retrying with %s", model, fallback_model)
-        text, images, citations, raw = await _try_model(fallback_model)
-
-    if not text or not str(text).strip():
-        raise RuntimeError(
-            f"Perplexity returned empty content from both '{model}' and fallback '{fallback_model}'"
-        )
-
-    return {"text": text, "images": images, "citations": citations, "raw": raw}
+# Legacy alias so call sites that still say call_perplexity(...) work without
+# a full rename sweep — they just get redirected to call_claude.
+async def call_perplexity(messages, model=None, max_tokens=4000, temperature=0.4,
+                           return_images=False, search_recency=None, timeout=60,
+                           fallback_model="auto", system=None, use_web_search=False):
+    m = model or AI_MODEL
+    # Map old sonar model names to Claude equivalents
+    if "sonar" in str(m):
+        m = AI_MODEL
+    result = await call_claude(messages=messages, model=m, max_tokens=max_tokens,
+                                system=system, use_web_search=use_web_search)
+    return {"text": result["text"], "images": [], "citations": [], "raw": result["raw"]}
 
 
 def extract_json_block(text: str):
@@ -702,7 +636,7 @@ async def cities_dynamic(refresh: int = 0, background_tasks: BackgroundTasks = N
     cached = await db.world_cache.find_one({"key": key}, {"_id": 0})
     if cached:
         return cached["data"]
-    if not PERPLEXITY_API_KEY:
+    if not ANTHROPIC_API_KEY:
         return {"items": []}
 
     pools = [
@@ -713,7 +647,7 @@ async def cities_dynamic(refresh: int = 0, background_tasks: BackgroundTasks = N
     ]
     chosen = pools[refresh % 4]
     try:
-        result = await call_perplexity(
+        result = await call_claude(
             model=AI_FAST_MODEL, max_tokens=3000,
             messages=[{"role": "user", "content": (
                 f"Buat panduan relokasi untuk 4 kota ini (khusus profesional Indonesia): {chosen}. "
@@ -746,7 +680,7 @@ async def travel_dynamic(refresh: int = 0):
     cached = await db.world_cache.find_one({"key": key}, {"_id": 0})
     if cached:
         return cached["data"]
-    if not PERPLEXITY_API_KEY:
+    if not ANTHROPIC_API_KEY:
         return {"items": []}
 
     pools = [
@@ -757,7 +691,7 @@ async def travel_dynamic(refresh: int = 0):
     ]
     chosen = pools[refresh % 4]
     try:
-        result = await call_perplexity(
+        result = await call_claude(
             model=AI_FAST_MODEL, max_tokens=3000,
             messages=[{"role": "user", "content": (
                 f"Buat panduan travel lengkap untuk 4 destinasi Indonesia ini: {chosen}. "
@@ -825,49 +759,42 @@ def _filter_upcoming(items: list, date_field: str = "date", grace_days: int = 1)
 
 
 async def _refresh_jakarta_bg(daily_key: str):
-    """Background task to refresh Jakarta data without blocking the response.
-    Content is modelled on Jakarta Instagram info accounts (esp. @jktinfo)."""
+    """Refresh Jakarta feed using Claude + web_search. Content styled like @jktinfo."""
     now = datetime.now(timezone.utc)
     try:
         today = now.strftime("%d %B %Y")
-        result = await call_perplexity(
-            model=AI_DEEP_MODEL,
+        result = await call_claude(
+            model=AI_WEB_MODEL,
             max_tokens=6000,
-            return_images=True,
-            search_recency="week",
+            use_web_search=True,
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Kamu adalah kurator konten ala akun Instagram @jktinfo. Buat feed 'Hari Ini di Jakarta' "
-                    f"untuk tanggal {today}, dengan gaya dan jenis konten seperti postingan @jktinfo dan akun info "
-                    f"Jakarta lain (@infojakarta, @jakarta.terkini): event & konser, kuliner/tempat nongkrong baru, "
-                    f"update transportasi (MRT/LRT/TransJakarta/tol), cuaca & kualitas udara, agenda kota/pemprov, "
-                    f"promo & lifestyle, serta info praktis warga. Cari informasi TERKINI dari web (utamakan yang "
-                    f"dibahas @jktinfo dan media Jakarta hari ini/minggu ini). "
-                    f"Untuk EVENT, sertakan HANYA yang tanggalnya {today} atau setelahnya (jangan yang sudah lewat). "
-                    f"JANGAN batasi jumlah item — buat sebanyak mungkin yang relevan (idealnya 10-15+ item). "
-                    f"Untuk tiap item tulis 'summary' sebagai caption ala Instagram yang LENGKAP, informatif, dan enak "
-                    f"dibaca (4-6 kalimat: apa, di mana, kapan, harga/tiket bila ada, kenapa menarik buat warga Jakarta). "
-                    f"Sertakan juga 'caption_hook' (1 kalimat pembuka menarik ala caption IG) dan 'hashtags' "
-                    f"(3-5 hashtag relevan tanpa tanda #, contoh: [\"jakarta\",\"infojakarta\",\"eventjakarta\"]). "
-                    f"Field 'date' dalam format ISO YYYY-MM-DD (atau 'YYYY-MM-DD to YYYY-MM-DD'); untuk info non-event "
-                    f"boleh diisi 'today'. "
-                    f"Output HANYA JSON array murni (tanpa markdown), format tiap item: "
+                    f"Hari ini {today}. Kamu adalah kurator konten ala akun Instagram @jktinfo. "
+                    f"Cari info TERKINI Jakarta hari ini dari web (prioritaskan @jktinfo, Detik, Kompas, "
+                    f"media Jakarta): event & konser mendatang (HANYA yang tanggalnya {today} atau setelahnya, "
+                    f"jangan yang sudah lewat), kuliner & tempat nongkrong baru, update transportasi "
+                    f"MRT/LRT/TransJakarta/tol hari ini, cuaca & kualitas udara, agenda Pemprov DKI, "
+                    f"promo & lifestyle, dan info praktis warga. "
+                    f"Buat minimal 10 postingan. Untuk tiap postingan, tulis 'summary' sebagai caption "
+                    f"ala Instagram yang PANJANG dan INFORMATIF — gaya bahasa anak Jakarta, santai, "
+                    f"tapi isinya lengkap (5-7 kalimat: apa, kapan, di mana, harga/tiket bila ada, "
+                    f"kenapa menarik buat warga Jakarta). Sertakan 'caption_hook' (1 kalimat pembuka "
+                    f"yang bikin orang penasaran, ala caption viral @jktinfo), dan 'hashtags' (4-6 hashtag "
+                    f"relevan sebagai array string tanpa tanda #). "
+                    f"Field 'date' format YYYY-MM-DD atau 'YYYY-MM-DD to YYYY-MM-DD'; untuk info non-event "
+                    f"isi 'today'. "
+                    f"Output HANYA JSON array murni (tanpa markdown): "
                     f'{{"emoji":"...","category":"...","title":"...","date":"...","location":"...","caption_hook":"...","summary":"...","hashtags":["..."],"tip":"..."}}. '
-                    f"Kategori salah satu dari: Event, Hiburan, Kuliner, Transportasi, Cuaca, Agenda Kota, Kualitas Udara, Lifestyle. "
-                    f"Emoji relevan per item. Bahasa Indonesia santai ala anak Jakarta. JSON saja, tanpa teks di luar JSON."
+                    f"Kategori: Event, Hiburan, Kuliner, Transportasi, Cuaca, Agenda Kota, Kualitas Udara, Lifestyle. "
+                    f"Bahasa Indonesia santai ala anak Jakarta. JSON saja."
                 ),
             }],
         )
         items = extract_json_block(result["text"])
         items = _filter_upcoming(items, date_field="date", grace_days=1)
-        images = result.get("images") or []
-        for i, item in enumerate(items):
-            if images:
-                img = images[i % len(images)]
-                item["img"] = img.get("image_url") or img.get("url") if isinstance(img, dict) else img
-            if not item.get("img"):
-                item["img"] = JAKARTA_IMAGE_POOL.get(item.get("category"), JAKARTA_IMAGE_POOL["default"])
+        for item in items:
+            item["img"] = JAKARTA_IMAGE_POOL.get(item.get("category"), JAKARTA_IMAGE_POOL["default"])
         if items:
             data = {"items": items, "updated_at": now_iso(), "source_handle": "@jktinfo"}
             await db.world_cache.update_one(
@@ -896,13 +823,13 @@ async def jakarta_live(background_tasks: BackgroundTasks):
         if age < 21600:  # 6h
             return cached["data"]
         # Stale — return stale data NOW, refresh in background
-        if PERPLEXITY_API_KEY:
+        if ANTHROPIC_API_KEY:
             background_tasks.add_task(_refresh_jakarta_bg, daily_key)
         return cached["data"]
 
     # No cache at all — attempt a bounded synchronous fetch so the first visitor
     # gets real data; fall back to (date-filtered) static + background if slow.
-    if PERPLEXITY_API_KEY:
+    if ANTHROPIC_API_KEY:
         try:
             await asyncio.wait_for(_refresh_jakarta_bg(daily_key), timeout=25)
             fresh = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
@@ -915,11 +842,11 @@ async def jakarta_live(background_tasks: BackgroundTasks):
     return {
         "items": _filter_upcoming(JAKARTA_AGENDA, date_field="date", grace_days=1),
         "updated_at": now_iso(),
-        "loading": bool(PERPLEXITY_API_KEY and not _world_last_error["jakarta"]),
+        "loading": bool(ANTHROPIC_API_KEY and not _world_last_error["jakarta"]),
         "source": "static",
         "source_handle": "@jktinfo",
         "ai_error": _world_last_error["jakarta"],
-        "ai_configured": bool(PERPLEXITY_API_KEY),
+        "ai_configured": bool(ANTHROPIC_API_KEY),
     }
 
 
@@ -946,47 +873,36 @@ NEWS_IMAGE_POOL = {
 
 
 async def _refresh_news_bg(daily_key: str):
-    """Background task to refresh world news without blocking."""
+    """Refresh world news using Claude + web_search for real today's news."""
     now = datetime.now(timezone.utc)
     try:
         today = now.strftime("%d %B %Y")
-        result = await call_perplexity(
-            model=AI_DEEP_MODEL,
+        result = await call_claude(
+            model=AI_WEB_MODEL,
             max_tokens=8000,
-            return_images=True,
-            search_recency="day",
+            use_web_search=True,
             messages=[{
                 "role": "user",
                 "content": (
-                    f"Cari berita PALING BARU hari ini ({today}) untuk pembaca Indonesia muda — bukan berita lama, "
-                    f"harus benar-benar berita hari ini atau maksimal 1-2 hari terakhir. "
-                    f"JANGAN batasi jumlah berita ke angka kecil. Kumpulkan minimal 15-20 berita total, WAJIB mencakup "
-                    f"minimal masing-masing 2-3 berita dari SETIAP kategori berikut (jangan lewatkan satupun kategori): "
-                    f"1) Geopolitik Dunia (konflik, diplomasi, kebijakan luar negeri negara besar), "
-                    f"2) Geopolitik/Politik Indonesia (kebijakan pemerintah, isu nasional terkini), "
-                    f"3) Teknologi & AI (perkembangan AI, startup, big tech), "
-                    f"4) Gadget (rilis HP/laptop/perangkat baru, review, harga), "
-                    f"5) Sepak Bola & Olahraga (Liga Champions, Premier League, Liga 1 Indonesia, Timnas, cabang olahraga lain), "
-                    f"6) Ekonomi & Pasar Finansial (global & Indonesia, IHSG, rupiah, saham, kripto). "
-                    f"Boleh tambah kategori lain (Kesehatan, Hiburan, Lingkungan) jika ada berita besar yang layak masuk. "
-                    f"Untuk tiap berita, tulis 'summary' sebagai narasi LENGKAP dan mendalam (minimal 5-7 kalimat, "
-                    f"JANGAN disingkat atau dipendekkan) yang menjelaskan duduk perkara, latar belakang, dampak "
-                    f"bagi Indonesia/investor/pembaca, dan data konkret (angka, tanggal, nama pihak terkait) bila tersedia. "
-                    f"Output HANYA JSON array murni (tanpa markdown fences): "
+                    f"Hari ini {today}. Cari dan tulis berita TERKINI hari ini dari sumber terpercaya "
+                    f"(Kompas, Detik, BBC, Reuters, CNN Indonesia, Bloomberg, dll). "
+                    f"Kumpulkan minimal 15 berita, WAJIB mencakup semua kategori ini: "
+                    f"Geopolitik Dunia, Indonesia, Teknologi, Gadget, Sepak Bola, Olahraga, Ekonomi, Pasar. "
+                    f"Untuk SETIAP berita, tulis narasi sepanjang artikel berita sungguhan — "
+                    f"bukan ringkasan 2 kalimat. Standar seperti artikel Kompas.com atau Detik.com: "
+                    f"minimal 5-8 kalimat per berita, mencakup: apa yang terjadi, siapa yang terlibat, "
+                    f"kapan dan di mana, latar belakang mengapa ini penting, angka/data konkret bila ada, "
+                    f"dan dampak atau perkembangan yang ditunggu ke depan. "
+                    f"Output HANYA JSON array murni tanpa markdown: "
                     f'[{{"category":"...","title":"...","summary":"..."}}]. '
-                    f"Kategori HARUS salah satu dari: Ekonomi, Geopolitik, Indonesia, Teknologi, Gadget, Pasar, Sepak Bola, Olahraga. "
-                    f"Bahasa Indonesia. JSON saja, tanpa penjelasan di luar JSON."
+                    f"Kategori harus salah satu dari: Ekonomi, Geopolitik, Indonesia, Teknologi, Gadget, Pasar, Sepak Bola, Olahraga. "
+                    f"Bahasa Indonesia. JSON saja."
                 ),
             }],
         )
         items = extract_json_block(result["text"])
-        images = result.get("images") or []
-        for i, item in enumerate(items):
-            if images:
-                img = images[i % len(images)]
-                item["img"] = (img.get("image_url") or img.get("url")) if isinstance(img, dict) else img
-            if not item.get("img"):
-                item["img"] = NEWS_IMAGE_POOL.get(item.get("category"), NEWS_IMAGE_POOL["default"])
+        for item in items:
+            item["img"] = NEWS_IMAGE_POOL.get(item.get("category"), NEWS_IMAGE_POOL["default"])
         if items:
             data = {"items": items, "updated_at": now_iso()}
             await db.world_cache.update_one(
@@ -1013,7 +929,7 @@ async def world_news(background_tasks: BackgroundTasks):
         age = (now - datetime.fromisoformat(cached["cached_at"])).total_seconds()
         if age < 3600:  # fresh within 1h
             return cached["data"]
-        if PERPLEXITY_API_KEY:
+        if ANTHROPIC_API_KEY:
             background_tasks.add_task(_refresh_news_bg, daily_key)
         return cached["data"]  # stale but instant
 
@@ -1024,7 +940,7 @@ async def world_news(background_tasks: BackgroundTasks):
     )
     if recent:
         # Serve earlier-today cache instantly, refresh this hour's bucket in bg.
-        if PERPLEXITY_API_KEY:
+        if ANTHROPIC_API_KEY:
             background_tasks.add_task(_refresh_news_bg, daily_key)
         return recent["data"]
 
@@ -1032,7 +948,7 @@ async def world_news(background_tasks: BackgroundTasks):
     # the very first visitor gets real news instead of being stuck on static
     # forever if background tasks silently fail. If it's too slow, fall back to
     # static + background and let the frontend poll.
-    if PERPLEXITY_API_KEY:
+    if ANTHROPIC_API_KEY:
         try:
             await asyncio.wait_for(_refresh_news_bg(daily_key), timeout=25)
             fresh = await db.world_cache.find_one({"key": daily_key}, {"_id": 0})
@@ -1045,10 +961,10 @@ async def world_news(background_tasks: BackgroundTasks):
     return {
         "items": NEWS_STATIC_FALLBACK,
         "updated_at": now_iso(),
-        "loading": bool(PERPLEXITY_API_KEY and not _world_last_error["news"]),
+        "loading": bool(ANTHROPIC_API_KEY and not _world_last_error["news"]),
         "source": "static",
         "ai_error": _world_last_error["news"],
-        "ai_configured": bool(PERPLEXITY_API_KEY),
+        "ai_configured": bool(ANTHROPIC_API_KEY),
     }
 
 
@@ -1094,7 +1010,7 @@ WEB_SEARCH_TOPICS = {"stock", "investment_strategy", "general"}
 async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     """Generate AI insight. Stock/investment topics use web search for real-time data.
     Cache is date-keyed for stock topics (expires daily)."""
-    if not PERPLEXITY_API_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     today = datetime.now(timezone.utc).strftime("%d %B %Y")  # e.g. "26 June 2026"
@@ -1123,18 +1039,14 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
     )
 
     try:
-        # Sonar models are web-grounded by default; sonar-pro handles both
-        # everyday and current-data-synthesis topics (stock/investment/general)
-        # reliably and quickly — no reasoning model needed.
-        model = AI_DEEP_MODEL if req.topic in WEB_SEARCH_TOPICS else AI_MODEL
-        result = await call_perplexity(
+        use_web = req.topic in WEB_SEARCH_TOPICS
+        model = AI_WEB_MODEL if use_web else AI_MODEL
+        result = await call_claude(
             model=model,
             max_tokens=4000,
-            search_recency="week" if req.topic in WEB_SEARCH_TOPICS else None,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt},
-            ],
+            system=system_msg,
+            use_web_search=use_web,
+            messages=[{"role": "user", "content": prompt}],
         )
         insight_text = result["text"]
         if not insight_text:
@@ -1158,7 +1070,7 @@ async def ai_insight(req: AIInsightReq, user: dict = Depends(get_user)):
 @api.post("/ai/chat")
 async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
     """Interactive financial/career advisor chat. Maintains conversation context."""
-    if not PERPLEXITY_API_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
@@ -1172,9 +1084,9 @@ async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
         + (f"Konteks pasar saat ini: {ctx_str}. " if ctx_str else "")
         + f"Jawab dalam {lang_label}. Gunakan markdown untuk struktur."
     )
-    msgs = [{"role": "system", "content": system_msg}] + [{"role": m.role, "content": m.content} for m in req.messages]
+    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
     try:
-        result = await call_perplexity(model=AI_MODEL, max_tokens=1500, messages=msgs)
+        result = await call_claude(model=AI_FAST_MODEL, max_tokens=1500, system=system_msg, messages=msgs)
         reply = result["text"]
     except Exception as e:
         logger.exception("AI chat failed")
@@ -1185,7 +1097,7 @@ async def ai_chat(req: AIChatReq, user: dict = Depends(get_user)):
 @api.post("/ai/life-goal-chat")
 async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
     """Life Goal Assistant — holistic life coach for Indonesian millennials."""
-    if not PERPLEXITY_API_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
@@ -1210,9 +1122,9 @@ async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
         f"Ingat: kamu bukan robot yang memberikan template jawaban. Kamu adalah teman cerdas yang benar-benar "
         f"mendengarkan dan membantu pengguna menemukan jawaban terbaik untuk situasi MEREKA."
     )
-    msgs = [{"role": "system", "content": system_msg}] + [{"role": m.role, "content": m.content} for m in req.messages]
+    msgs = [{"role": m.role, "content": m.content} for m in req.messages]
     try:
-        result = await call_perplexity(model=AI_MODEL, max_tokens=2000, messages=msgs)
+        result = await call_claude(model=AI_FAST_MODEL, max_tokens=2000, system=system_msg, messages=msgs)
         reply = result["text"]
     except Exception as e:
         logger.exception("Life goal chat failed")
@@ -1223,7 +1135,7 @@ async def life_goal_chat(req: AIChatReq, user: dict = Depends(get_user)):
 @api.post("/ai/investment-simulator")
 async def investment_simulator(req: SimulatorReq, user: dict = Depends(get_user)):
     """AI-powered investment simulator: given capital, risk profile & horizon → optimal allocation + projections."""
-    if not PERPLEXITY_API_KEY:
+    if not ANTHROPIC_API_KEY:
         raise HTTPException(500, "AI not configured")
 
     lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
@@ -1252,9 +1164,9 @@ async def investment_simulator(req: SimulatorReq, user: dict = Depends(get_user)
         f"Output ONLY valid JSON. Bahasa: {lang_label}."
     )
     try:
-        ai_result = await call_perplexity(
-            model=AI_DEEP_MODEL, max_tokens=3500,
-            search_recency="week",
+        ai_result = await call_claude(
+            model=AI_MODEL, max_tokens=3500,
+            use_web_search=True,
             messages=[{"role": "user", "content": prompt}],
         )
         result = extract_json_block(ai_result["text"])
@@ -1487,7 +1399,7 @@ async def cv_generate(req: CVRequest, user: dict = Depends(get_user)):
     from fastapi.responses import Response
 
     ai_bullets = {"experiences": {}, "tips": [], "summary": None}
-    if PERPLEXITY_API_KEY:
+    if ANTHROPIC_API_KEY:
         lang_label = "Bahasa Indonesia" if req.language == "id" else "English"
         prompt = (
             "Anda adalah CV writer profesional ATS-optimized. Berdasarkan data berikut:\n"
@@ -1506,13 +1418,11 @@ async def cv_generate(req: CVRequest, user: dict = Depends(get_user)):
             f"Bahasa: {lang_label}. Output STRICT JSON only."
         )
         try:
-            ai_result = await call_perplexity(
-                model=AI_MODEL,
+            ai_result = await call_claude(
+                model=AI_FAST_MODEL,
                 max_tokens=1500,
-                messages=[
-                    {"role": "system", "content": "You output strict JSON only."},
-                    {"role": "user", "content": prompt},
-                ],
+                system="You output strict JSON only.",
+                messages=[{"role": "user", "content": prompt}],
             )
             parsed = extract_json_block(ai_result["text"])
             ai_bullets["summary"] = parsed.get("summary")
@@ -1627,15 +1537,17 @@ async def root():
 @api.get("/debug/ai")
 async def debug_ai():
     info = {
-        "provider": "perplexity",
-        "key_set": bool(PERPLEXITY_API_KEY),
-        "key_prefix": PERPLEXITY_API_KEY[:8] + "..." if PERPLEXITY_API_KEY else None,
-        "key_looks_like_perplexity": PERPLEXITY_API_KEY.startswith("pplx-") if PERPLEXITY_API_KEY else False,
+        "provider": "anthropic",
+        "key_set": bool(ANTHROPIC_API_KEY),
+        "key_prefix": ANTHROPIC_API_KEY[:12] + "..." if ANTHROPIC_API_KEY else None,
+        "key_looks_like_claude": ANTHROPIC_API_KEY.startswith("sk-ant-") if ANTHROPIC_API_KEY else False,
         "model": AI_MODEL,
+        "web_model": AI_WEB_MODEL,
+        "fast_model": AI_FAST_MODEL,
     }
-    if PERPLEXITY_API_KEY:
+    if ANTHROPIC_API_KEY:
         try:
-            r = await call_perplexity(model=AI_MODEL, max_tokens=50, messages=[{"role": "user", "content": "Say OK"}])
+            r = await call_claude(messages=[{"role": "user", "content": "Say OK"}], model=AI_MODEL, max_tokens=50)
             info["test_call"] = "success"
             info["response"] = r["text"]
         except Exception as e:
@@ -1649,15 +1561,15 @@ async def debug_news_raw():
     """Run the EXACT news-generation call synchronously and surface the real
     Perplexity response/error. Use this to diagnose why /world/news stays static:
     if this returns an error, that error is why the background refresh silently fails."""
-    if not PERPLEXITY_API_KEY:
-        return {"ok": False, "error": "PERPLEXITY_API_KEY not configured"}
+    if not ANTHROPIC_API_KEY:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
     now = datetime.now(timezone.utc)
     today = now.strftime("%d %B %Y")
     steps = {}
     # Step 1: try WITH images + recency (the production config)
     try:
-        result = await call_perplexity(
-            model=AI_DEEP_MODEL, max_tokens=8000, return_images=True, search_recency="day",
+        result = await call_claude(
+            model=AI_WEB_MODEL, max_tokens=2000, use_web_search=True,
             messages=[{"role": "user", "content": (
                 f"Cari 5 berita penting hari ini ({today}). Output HANYA JSON array: "
                 f'[{{"category":"...","title":"...","summary":"..."}}]. Bahasa Indonesia. JSON saja.'
@@ -1665,7 +1577,6 @@ async def debug_news_raw():
         )
         steps["call"] = "success"
         steps["raw_text_preview"] = (result["text"] or "")[:800]
-        steps["num_images_returned"] = len(result.get("images") or [])
         try:
             items = extract_json_block(result["text"])
             steps["json_parsed"] = True

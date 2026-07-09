@@ -15,7 +15,7 @@ services:
         sync: false
       - key: DEFAULT_PASSCODE
         sync: false
-      - key: PERPLEXITY_API_KEY
+      - key: ANTHROPIC_API_KEY
         sync: false
       - key: VAPID_PUBLIC_KEY
         sync: false
